@@ -40,7 +40,7 @@
 
 ```
 qt_ffplay/
-├── bin/                              # 可执行文件输出目录
+├── bin/                          # 可执行文件输出目录
 │   ├── qt_ffplay.exe
 │   ├── avcodec-60.dll
 │   ├── avdevice-60.dll
@@ -52,33 +52,31 @@ qt_ffplay/
 │   ├── swscale-7.dll
 │   └── SDL2.dll
 │
-├── compat/                           # 兼容性头文件
-│   ├── va_copy.h
-│   ├── w32dlfcn.h
-│   └── w32pthreads.h
-│
-├── dll/                              # FFmpeg 和 SDL2 的 DLL 文件
-│   ├── avcodec-60.dll
-│   ├── avdevice-60.dll
-│   ├── avfilter-9.dll
-│   ├── avformat-60.dll
-│   ├── avutil-58.dll
-│   ├── postproc-57.dll
-│   ├── swresample-4.dll
-│   ├── swscale-7.dll
-│   └── SDL2.dll
-│
-├── include/                          # 头文件目录
+├── include/                      # 头文件和源文件目录
 │   ├── ffmpeg/
-│   │   ├── libavcodec/
+│   │   ├── libavcodec/           # FFmpeg 库头文件
 │   │   ├── libavdevice/
 │   │   ├── libavfilter/
 │   │   ├── libavformat/
 │   │   ├── libavutil/
-│   │   │   └── ffversion.h       # 需要手动创建
+│   │   │   └── ffversion.h       # 需./configure编译和make后，从源码拷贝。或者手动创建
 │   │   ├── libpostproc/
 │   │   ├── libswresample/
-│   │   └── libswscale/
+│   │   ├── libswscale/
+│   │   │
+│   │   ├── compat/               # 兼容性头文件
+│   │   │   ├── va_copy.h
+│   │   │   ├── w32dlfcn.h
+│   │   │   └── w32pthreads.h
+│   │   │
+│   │   ├── cmdutils.c            # 从源码拷贝
+│   │   ├── cmdutils.h            # 从源码拷贝
+│   │   ├── opt_common.c          # 从源码拷贝
+│   │   ├── opt_common.h          # 从源码拷贝
+│   │   ├── fopen_utf8.h          # 从源码拷贝
+│   │   ├── config.h              # 需./configure编译后，从源码拷贝
+│   │   └── config_components.h   # 需./configure编译后，从源码拷贝
+│   │
 │   └── SDL2/
 │       └── *.h
 │
@@ -93,14 +91,7 @@ qt_ffplay/
 │
 ├── ffmpeg-6.1.1-source/              # FFmpeg 源码（用于提取文件）
 │
-├── cmdutils.c                        # 从源码拷贝
-├── cmdutils.h                        # 从源码拷贝
-├── opt_common.c                      # 从源码拷贝
-├── opt_common.h                      # 从源码拷贝
-├── ffplay.c                          # 从源码拷贝
-├── fopen_utf8.h                      # 从源码拷贝
-├── config.h                          # 从源码拷贝
-├── config_components.h               # 从源码拷贝
+├── ffplay.c                          # FFplay 主程序（保留在根目录）
 └── qt_ffplay.pro                     # Qt 项目文件
 ```
 
@@ -123,31 +114,36 @@ qt_ffplay/
 在项目根目录执行以下命令（PowerShell）：
 
 ```powershell
-# 拷贝核心源文件
-Copy-Item "ffmpeg-6.1.1-source\fftools\cmdutils.c" "cmdutils.c" -Force
-Copy-Item "ffmpeg-6.1.1-source\fftools\cmdutils.h" "cmdutils.h" -Force
-Copy-Item "ffmpeg-6.1.1-source\fftools\opt_common.c" "opt_common.c" -Force
-Copy-Item "ffmpeg-6.1.1-source\fftools\opt_common.h" "opt_common.h" -Force
+# 创建目标目录
+New-Item -ItemType Directory -Path "include\ffmpeg" -Force
+
+# 拷贝核心源文件到 include/ffmpeg 目录
+Copy-Item "ffmpeg-6.1.1-source\fftools\cmdutils.c" "include\ffmpeg\cmdutils.c" -Force
+Copy-Item "ffmpeg-6.1.1-source\fftools\cmdutils.h" "include\ffmpeg\cmdutils.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\fftools\opt_common.c" "include\ffmpeg\opt_common.c" -Force
+Copy-Item "ffmpeg-6.1.1-source\fftools\opt_common.h" "include\ffmpeg\opt_common.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\fftools\fopen_utf8.h" "include\ffmpeg\fopen_utf8.h" -Force
+
+# ffplay.c 保留在根目录
 Copy-Item "ffmpeg-6.1.1-source\fftools\ffplay.c" "ffplay.c" -Force
-Copy-Item "ffmpeg-6.1.1-source\fftools\fopen_utf8.h" "fopen_utf8.h" -Force
 ```
 
 **文件说明：**
-- `cmdutils.c/h` - 命令行工具通用函数
-- `opt_common.c/h` - 命令行选项处理
-- `ffplay.c` - FFplay 主程序
-- `fopen_utf8.h` - UTF-8 文件打开支持
+- `cmdutils.c/h` - 命令行工具通用函数 → `include/ffmpeg/`
+- `opt_common.c/h` - 命令行选项处理 → `include/ffmpeg/`
+- `fopen_utf8.h` - UTF-8 文件打开支持 → `include/ffmpeg/`
+- `ffplay.c` - FFplay 主程序 → **根目录**（便于修改和调试）
 
 ### 2.2 兼容性头文件（从 `ffmpeg-6.1.1-source/compat/` 拷贝）
 
 ```powershell
 # 创建 compat 目录
-New-Item -ItemType Directory -Path "compat" -Force
+New-Item -ItemType Directory -Path "include\ffmpeg\compat" -Force
 
-# 拷贝兼容性头文件
-Copy-Item "ffmpeg-6.1.1-source\compat\va_copy.h" "compat\va_copy.h" -Force
-Copy-Item "ffmpeg-6.1.1-source\compat\w32dlfcn.h" "compat\w32dlfcn.h" -Force
-Copy-Item "ffmpeg-6.1.1-source\compat\w32pthreads.h" "compat\w32pthreads.h" -Force
+# 拷贝兼容性头文件到 include/ffmpeg/compat
+Copy-Item "ffmpeg-6.1.1-source\compat\va_copy.h" "include\ffmpeg\compat\va_copy.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\compat\w32dlfcn.h" "include\ffmpeg\compat\w32dlfcn.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\compat\w32pthreads.h" "include\ffmpeg\compat\w32pthreads.h" -Force
 ```
 
 **文件说明：**
@@ -162,13 +158,24 @@ Copy-Item "ffmpeg-6.1.1-source\compat\w32pthreads.h" "compat\w32pthreads.h" -For
 **如果您的源码目录中已经有这些文件（已编译过的源码）：**
 
 ```powershell
-Copy-Item "ffmpeg-6.1.1-source\config.h" "config.h" -Force
-Copy-Item "ffmpeg-6.1.1-source\config_components.h" "config_components.h" -Force
+# 拷贝配置文件到 include/ffmpeg 目录
+Copy-Item "ffmpeg-6.1.1-source\config.h" "include\ffmpeg\config.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\config_components.h" "include\ffmpeg\config_components.h" -Force
 ```
 
 **如果您的源码目录中没有这些文件（未编译的纯源码）：**
 
-这些文件需要从已编译的 FFmpeg 包中获取，或者从其他已配置的 FFmpeg 源码中拷贝。
+在源码目录下执行 configure 脚本生成这些文件：
+```bash
+cd ffmpeg-6.1.1-source
+./configure
+```
+
+然后拷贝到项目：
+```powershell
+Copy-Item "ffmpeg-6.1.1-source\config.h" "include\ffmpeg\config.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\config_components.h" "include\ffmpeg\config_components.h" -Force
+```
 
 **文件说明：**
 - `config.h` - FFmpeg 编译配置（定义了 FFmpeg 的各种编译选项和系统特性）
@@ -212,19 +219,7 @@ CONFIG += c++11
 CONFIG += console
 
 SOURCES += \
-    cmdutils.c \
-    opt_common.c \
     ffplay.c
-
-HEADERS += \
-    cmdutils.h \
-    opt_common.h \
-    config.h \
-    config_components.h \
-    fopen_utf8.h \
-    compat/va_copy.h \
-    compat/w32dlfcn.h \
-    compat/w32pthreads.h
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/
@@ -277,8 +272,10 @@ CONFIG(debug, debug|release) {
 
 # ========== 平台配置 ==========
 win32 {
+    # FFmpeg 相关文件都在 include/ffmpeg 目录
     INCLUDEPATH += $$PWD/include/ffmpeg
     INCLUDEPATH += $$PWD/include/SDL2
+    # ffplay.c 在根目录，需要访问 include/ffmpeg 中的文件
     INCLUDEPATH += $$PWD
 
     # MinGW 编译器配置
@@ -354,18 +351,27 @@ win32 {
 
 #### 关键配置项
 
-1. **输出目录**
+1. **源文件组织**
+   - `ffplay.c` - 保留在根目录（便于修改）
+   - 其他 FFmpeg 工具文件 - 在 `include/ffmpeg/` 目录
+
+2. **输出目录**
    - `DESTDIR` - 可执行文件输出到 `bin/`
 
-2. **编译器检测**
+3. **编译器检测**
    - 自动检测 MinGW、MSVC、GCC
    - 自动检测 x86、x64、arm64 架构
 
-3. **MinGW 特定配置**
+4. **包含路径配置**
+   - `include/ffmpeg/` - FFmpeg 工具源文件和配置
+   - `include/SDL2/` - SDL2 头文件
+   - 根目录 - ffplay.c 的位置
+
+5. **MinGW 特定配置**
    - 定义 `WC_ERR_INVALID_CHARS` 解决老版本 MinGW 的兼容性问题
    - 使用 `-lavformat` 等链接 `.dll.a` 格式的库
 
-4. **MSVC 特定配置**
+6. **MSVC 特定配置**
    - 使用 `.lib` 格式的库
    - 添加 `shell32.lib` 和 `Ole32.lib`（必需）
    - PDB 文件输出到 build 目录
@@ -495,9 +501,15 @@ LIBS += shell32.lib Ole32.lib
 **方案1：** 从已编译的 FFmpeg 源码获取
 - 如果有编译过的 FFmpeg 源码，从那里拷贝这两个文件
 
-**方案2：** 在源码目录下执行configure脚本即可生成。
-```c
+**方案2：** 在源码目录下执行 configure 脚本生成
+```bash
+cd ffmpeg-6.1.1-source
 ./configure
+```
+然后拷贝到项目：
+```powershell
+Copy-Item "ffmpeg-6.1.1-source\config.h" "include\ffmpeg\config.h" -Force
+Copy-Item "ffmpeg-6.1.1-source\config_components.h" "include\ffmpeg\config_components.h" -Force
 ```
 
 ---
@@ -508,25 +520,25 @@ LIBS += shell32.lib Ole32.lib
 
 | 序号 | 源文件路径 | 目标路径 | 说明 | 备注 |
 |-----|-----------|---------|------|------|
-| 1 | `fftools/cmdutils.c` | `cmdutils.c` | 命令行工具核心 | ✅ 源码文件 |
-| 2 | `fftools/cmdutils.h` | `cmdutils.h` | 命令行工具头文件 | ✅ 源码文件 |
-| 3 | `fftools/opt_common.c` | `opt_common.c` | 选项处理实现 | ✅ 源码文件 |
-| 4 | `fftools/opt_common.h` | `opt_common.h` | 选项处理头文件 | ✅ 源码文件 |
-| 5 | `fftools/ffplay.c` | `ffplay.c` | FFplay 主程序 | ✅ 源码文件 |
-| 6 | `fftools/fopen_utf8.h` | `fopen_utf8.h` | UTF-8 文件支持 | ✅ 源码文件 |
-| 7 | `compat/va_copy.h` | `compat/va_copy.h` | va_list 兼容 | ✅ 源码文件 |
-| 8 | `compat/w32dlfcn.h` | `compat/w32dlfcn.h` | Windows DLL 兼容 | ✅ 源码文件 |
-| 9 | `compat/w32pthreads.h` | `compat/w32pthreads.h` | Windows 线程兼容 | ✅ 源码文件 |
-| 10 | `config.h` | `config.h` | FFmpeg 编译配置 | ⚠️ 编译生成 |
-| 11 | `config_components.h` | `config_components.h` | FFmpeg 组件配置 | ⚠️ 编译生成 |
+| 1 | `fftools/cmdutils.c` | `include/ffmpeg/cmdutils.c` | 命令行工具核心 | ✅ 源码文件 |
+| 2 | `fftools/cmdutils.h` | `include/ffmpeg/cmdutils.h` | 命令行工具头文件 | ✅ 源码文件 |
+| 3 | `fftools/opt_common.c` | `include/ffmpeg/opt_common.c` | 选项处理实现 | ✅ 源码文件 |
+| 4 | `fftools/opt_common.h` | `include/ffmpeg/opt_common.h` | 选项处理头文件 | ✅ 源码文件 |
+| 5 | `fftools/ffplay.c` | `ffplay.c` | FFplay 主程序 | ✅ 源码文件（**根目录**） |
+| 6 | `fftools/fopen_utf8.h` | `include/ffmpeg/fopen_utf8.h` | UTF-8 文件支持 | ✅ 源码文件 |
+| 7 | `compat/va_copy.h` | `include/ffmpeg/compat/va_copy.h` | va_list 兼容 | ✅ 源码文件 |
+| 8 | `compat/w32dlfcn.h` | `include/ffmpeg/compat/w32dlfcn.h` | Windows DLL 兼容 | ✅ 源码文件 |
+| 9 | `compat/w32pthreads.h` | `include/ffmpeg/compat/w32pthreads.h` | Windows 线程兼容 | ✅ 源码文件 |
+| 10 | `config.h` | `include/ffmpeg/config.h` | FFmpeg 编译配置 | ⚠️ 编译生成 |
+| 11 | `config_components.h` | `include/ffmpeg/config_components.h` | FFmpeg 组件配置 | ⚠️ 编译生成 |
 
-### 需要手动创建的文件（3 个）
+### 需要手动创建或生成的文件（3 个）
 
 | 序号 | 文件路径 | 说明 | 备注 |
 |-----|---------|------|------|
 | 1 | `include/ffmpeg/libavutil/ffversion.h` | 版本信息头文件 | ⚠️ 编译生成，需手动创建 |
-| 2 | `config.h`（如果源码中没有） | FFmpeg 编译配置 | ⚠️ 可用最小配置替代 |
-| 3 | `config_components.h`（如果源码中没有） | 组件配置 | ⚠️ 可用最小配置替代 |
+| 2 | `include/ffmpeg/config.h`（如果源码中没有） | FFmpeg 编译配置 | ⚠️ 运行 configure 生成 |
+| 3 | `include/ffmpeg/config_components.h`（如果源码中没有） | 组件配置 | ⚠️ 运行 configure 生成 |
 
 **图例说明：**
 - ✅ **源码文件** - 可直接从未编译的源码中获取

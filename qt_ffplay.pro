@@ -3,19 +3,7 @@ CONFIG += c++11
 CONFIG += console
 
 SOURCES += \
-    cmdutils.c \
-    opt_common.c \
     ffplay.c
-
-HEADERS += \
-    cmdutils.h \
-    opt_common.h \
-    config.h \
-    config_components.h \
-    fopen_utf8.h \
-    compat/va_copy.h \
-    compat/w32dlfcn.h \
-    compat/w32pthreads.h
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/

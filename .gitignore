@@ -17,10 +17,10 @@ cscope*
 build
 *.o
 *.obj
-
 *.pid
 *.log
 *.db
+bin/*.ilk
 
 .qmake.stash
 tmp
