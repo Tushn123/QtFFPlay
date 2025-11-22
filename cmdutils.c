@@ -367,6 +367,7 @@ void parse_options(void *optctx, int argc, char **argv, const OptionDef *options
                 exit_program(1);
             optindex += ret;
         } else {
+            // 解析文件名
             if (parse_arg_function)
                 parse_arg_function(optctx, opt);
         }

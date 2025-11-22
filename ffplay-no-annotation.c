@@ -112,19 +112,19 @@ const int program_birth_year = 2003;
 static unsigned sws_flags = SWS_BICUBIC;
 
 typedef struct MyAVPacketList {
-    AVPacket *pkt;      //解封装后的数据
-    int serial;         //播放序列，它的值来自PacketQueue的serial的赋值
+    AVPacket *pkt;
+    int serial;
 } MyAVPacketList;
 
 typedef struct PacketQueue {
     AVFifo *pkt_list;
-    int nb_packets;        // 包数量，也就是队列元素数量 
-    int size;              // 队列所有元素的数据⼤⼩总和
-    int64_t duration;      // 队列所有元素的数据播放持续时间
-    int abort_request;     // =1时请求退出播放
-    int serial;            // 播放序列
-    SDL_mutex *mutex;      // 互斥锁
-    SDL_cond *cond;        // 条件变量
+    int nb_packets;
+    int size;
+    int64_t duration;
+    int abort_request;
+    int serial;
+    SDL_mutex *mutex;
+    SDL_cond *cond;
 } PacketQueue;
 
 #define VIDEO_PICTURE_QUEUE_SIZE 3
@@ -133,48 +133,47 @@ typedef struct PacketQueue {
 #define FRAME_QUEUE_SIZE FFMAX(SAMPLE_QUEUE_SIZE, FFMAX(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
 
 typedef struct AudioParams {
-    int freq;                   // 采样率
-    AVChannelLayout ch_layout;  // 通道布局，⽐如2.1声道，5.1声道等
-    enum AVSampleFormat fmt;    // ⾳频采样格式，⽐如AV_SAMPLE_FMT_S16表示为有符号16bit深度，交错排列模式
-    int frame_size;             // ⼀个采样单元占⽤的字节数（⽐如2通道时，则左右通道各采样⼀次合成⼀个采样单元）
-    int bytes_per_sec;          // 每秒字节数，即码率⽐如采样率48Khz，2channel，16bit，则⼀秒48000*2*16/8=192000字节
+    int freq;
+    AVChannelLayout ch_layout;
+    enum AVSampleFormat fmt;
+    int frame_size;
+    int bytes_per_sec;
 } AudioParams;
 
 typedef struct Clock {
-    double pts;           // 时钟基础, 当前帧(待播放)显示时间戳，播放后，当前帧变成上⼀帧，单位为秒
-    double pts_drift;     // 当前pts与当前系统时钟的差值, audio、video对于该值是独⽴的
-    double last_updated;  // 最后⼀次更新的系统时钟
-    double speed;         // 时钟速度控制，⽤于控制播放速度
-    int serial;           // 播放序列，所谓播放序列就是⼀段连续的播放动作，⼀个seek操作会启动⼀段新的播放序列，会加1
-    int paused;           // = 1 说明是暂停状态
+    double pts;           /* clock base */
+    double pts_drift;     /* clock base minus time at which we updated the clock */
+    double last_updated;
+    double speed;
+    int serial;           /* clock is based on a packet with this serial */
+    int paused;
     int *queue_serial;    /* pointer to the current packet queue serial, used for obsolete clock detection */
 } Clock;
 
 /* Common struct for handling all types of decoded data and allocated render buffers. */
 typedef struct Frame {
-    AVFrame *frame;       // 指向数据帧
-    AVSubtitle sub;       // ⽤于字幕
-    int serial;           // 播放序列，在seek的操作时serial会变化
-    double pts;           // 时间戳，单位为秒
-    double duration;      // 该帧持续时间，单位为秒
-    int64_t pos;          // 该帧在输⼊⽂件中的字节位置
-    int width;            // 图像宽度
-    int height;           // 图像高度
-    int format;           // 对于图像为(enum AVPixelFormat)，对于声⾳则为(enum AVSampleFormat)
-    AVRational sar;       // 图像的宽⾼⽐，如果未知或未指定则为0/1, 该值来⾃AVFrame结构体的sample_aspect_ratio变量
-    int uploaded;         // =1时表示图像数据已经上传到SDL纹理, 记录该帧是否已经显示过
-    int flip_v;           // =1时表示图像需要垂直翻转, = 0则正常播放
+    AVFrame *frame;
+    AVSubtitle sub;
+    int serial;
+    double pts;           /* presentation timestamp for the frame */
+    double duration;      /* estimated duration of the frame */
+    int64_t pos;          /* byte position of the frame in the input file */
+    int width;
+    int height;
+    int format;
+    AVRational sar;
+    int uploaded;
+    int flip_v;
 } Frame;
 
-// 环形队列，每⼀个frame_queue⼀个写端⼀个读端，写端位于解码线程，读端位于播放线程
 typedef struct FrameQueue {
-    Frame queue[FRAME_QUEUE_SIZE];  // FRAME_QUEUE_SIZE 最⼤size, 数字太⼤时会占⽤⼤量的内存，需要注意该值的设置
-    int rindex;                     // 读索引。待播放时读取此帧进⾏播放，播放后此帧成为上⼀帧
-    int windex;                     // 写索引
-    int size;                       // 当前总帧数
-    int max_size;                   // 可存储最⼤帧数
-    int keep_last;                  // =1时表示保留最后⼀帧，⽤于下⼀次seek时使⽤
-    int rindex_shown;               // 初始化为0，配合keep_last=1使⽤,
+    Frame queue[FRAME_QUEUE_SIZE];
+    int rindex;
+    int windex;
+    int size;
+    int max_size;
+    int keep_last;
+    int rindex_shown;
     SDL_mutex *mutex;
     SDL_cond *cond;
     PacketQueue *pktq;
@@ -188,89 +187,81 @@ enum {
 
 typedef struct Decoder {
     AVPacket *pkt;
-    PacketQueue *queue;                 // 数据包队列
-    AVCodecContext *avctx;              // 解码器上下⽂
-    int pkt_serial;                     // 包序列
-    int finished;                       // =0，解码器处于⼯作状态；=⾮0，解码器处于空闲状态
-    int packet_pending;                 // =0，解码器处于异常状态，需要考虑重置解码器；=1，解码器处于正常状态
-    SDL_cond *empty_queue_cond;         // 检查到packet队列空时发送 signal缓存read_thread读取数据
-    int64_t start_pts;                  // 初始化时是stream的start time
-    AVRational start_pts_tb;            // 初始化时是stream的time_base
-    int64_t next_pts;                   // 记录最近⼀次解码后的frame的pts，当解出来的部分帧没有有效的pts时则使⽤next_pts进⾏推算
-    AVRational next_pts_tb;             // next_pts的时间基
-    SDL_Thread *decoder_tid;            // 线程句柄
+    PacketQueue *queue;
+    AVCodecContext *avctx;
+    int pkt_serial;
+    int finished;
+    int packet_pending;
+    SDL_cond *empty_queue_cond;
+    int64_t start_pts;
+    AVRational start_pts_tb;
+    int64_t next_pts;
+    AVRational next_pts_tb;
+    SDL_Thread *decoder_tid;
 } Decoder;
 
 typedef struct VideoState {
-    SDL_Thread *read_tid;               // 读线程句柄
-    const AVInputFormat *iformat;       // 指向demuxer
-    int abort_request;                  // =1时请求退出播放
-    int force_refresh;                  // =1时需要刷新画⾯，请求⽴即刷新画⾯的意思，如暂停时窗口尺寸变化需要刷新
-    int paused;                         // =1时暂停，=0时播放
-    int last_paused;                    // 暂存“暂停”/“播放”状态
+    SDL_Thread *read_tid;
+    const AVInputFormat *iformat;
+    int abort_request;
+    int force_refresh;
+    int paused;
+    int last_paused;
     int queue_attachments_req;
-    int seek_req;                       // 标识⼀次seek请求
-    int seek_flags;                     // seek标志，诸如AVSEEK_FLAG_BYTE等，seek可以指定不同的行为
-    int64_t seek_pos;                   // 请求seek的⽬标位置(当前位置+增量)
-    int64_t seek_rel;                   // 本次seek的位置增量
+    int seek_req;
+    int seek_flags;
+    int64_t seek_pos;
+    int64_t seek_rel;
     int read_pause_return;
-    AVFormatContext *ic;                // iformat的上下⽂
-    int realtime;                       // =1为实时流
+    AVFormatContext *ic;
+    int realtime;
 
     Clock audclk;
     Clock vidclk;
     Clock extclk;
 
-    FrameQueue pictq;                   // 视频Frame队列
-    FrameQueue subpq;                   // 字幕Frame队列
-    FrameQueue sampq;                   // 音频Frame队列
+    FrameQueue pictq;
+    FrameQueue subpq;
+    FrameQueue sampq;
 
     Decoder auddec;
     Decoder viddec;
     Decoder subdec;
 
-    int audio_stream;                   // ⾳频流索引
+    int audio_stream;
 
-    int av_sync_type;                   // ⾳视频同步类型, 默认audio master
+    int av_sync_type;
 
-    double audio_clock;                 // 当前⾳频帧的PTS+当前帧Duration
-    int audio_clock_serial;             // 播放序列，seek可改变此值
-    // 以下4个参数 ⾮audio master同步⽅式使⽤
+    double audio_clock;
+    int audio_clock_serial;
     double audio_diff_cum; /* used for AV difference average computation */
     double audio_diff_avg_coef;
     double audio_diff_threshold;
     int audio_diff_avg_count;
-
-    AVStream *audio_st;                 // ⾳频流
-    PacketQueue audioq;                 // ⾳频packet队列
-    int audio_hw_buf_size;              // SDL⾳频缓冲区的⼤⼩(字节为单位)
-                                        // 指向待播放的⼀帧⾳频数据，指向的数据区将被拷⼊SDL⾳频缓冲区。若经过重采样
-                                        // 则指向audio_buf1，否则指向frame中的⾳频
-    uint8_t *audio_buf;                 // 指向需要重采样的数据
-    uint8_t *audio_buf1;                // 指向重采样后的数据
-    unsigned int audio_buf_size;        // 待播放的⼀帧⾳频数据(audio_buf指向)的⼤⼩
-    unsigned int audio_buf1_size;       // 申请到的⾳频缓冲区audio_buf1的实际尺⼨
-    int audio_buf_index;                // 更新拷⻉位置 当前⾳频帧中已拷⼊SDL⾳频缓冲区的位置索引(指向第⼀个待拷⻉字节)
-                                        // 当前⾳频帧中尚未拷⼊SDL⾳频缓冲区的数据量:
-                                        // audio_buf_size = audio_buf_index + audio_write_buf_size
+    AVStream *audio_st;
+    PacketQueue audioq;
+    int audio_hw_buf_size;
+    uint8_t *audio_buf;
+    uint8_t *audio_buf1;
+    unsigned int audio_buf_size; /* in bytes */
+    unsigned int audio_buf1_size;
+    int audio_buf_index; /* in bytes */
     int audio_write_buf_size;
-    int audio_volume;                   // ⾳量
-    int muted;                          // =1静⾳，=0则正常
-    struct AudioParams audio_src;       // ⾳频frame的参数
+    int audio_volume;
+    int muted;
+    struct AudioParams audio_src;
 #if CONFIG_AVFILTER
     struct AudioParams audio_filter_src;
 #endif
-    struct AudioParams audio_tgt;       // SDL⽀持的⾳频参数，重采样转换：audio_src->audio_tgt
-    struct SwrContext *swr_ctx;         // ⾳频重采样context
-    int frame_drops_early;              // 丢弃视频packet计数
-    int frame_drops_late;               // 丢弃视频frame计数
+    struct AudioParams audio_tgt;
+    struct SwrContext *swr_ctx;
+    int frame_drops_early;
+    int frame_drops_late;
 
     enum ShowMode {
         SHOW_MODE_NONE = -1, SHOW_MODE_VIDEO = 0, SHOW_MODE_WAVES, SHOW_MODE_RDFT, SHOW_MODE_NB
     } show_mode;
     int16_t sample_array[SAMPLE_ARRAY_SIZE];
-
-    // ⾳频波形显示使⽤
     int sample_array_index;
     int last_i_start;
     RDFTContext *rdft;
@@ -279,28 +270,27 @@ typedef struct VideoState {
     int xpos;
     double last_vis_time;
     SDL_Texture *vis_texture;
+    SDL_Texture *sub_texture;
+    SDL_Texture *vid_texture;
 
-    SDL_Texture *sub_texture;           // 字幕纹理
-    SDL_Texture *vid_texture;           // 视频纹理
+    int subtitle_stream;
+    AVStream *subtitle_st;
+    PacketQueue subtitleq;
 
-    int subtitle_stream;                // 字幕流索引
-    AVStream *subtitle_st;              // 字幕流
-    PacketQueue subtitleq;              // 字幕packet队列
-
-    double frame_timer;                 // 记录最后⼀帧播放的时刻
+    double frame_timer;
     double frame_last_returned_time;
     double frame_last_filter_delay;
-    int video_stream;                   // 视频流索引
-    AVStream *video_st;                 // 视频流
-    PacketQueue videoq;                 // 视频队列
-    double max_frame_duration;          // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
-    struct SwsContext *img_convert_ctx; // 视频尺⼨格式变换
-    struct SwsContext *sub_convert_ctx; // 字幕尺⼨格式变换
-    int eof;                            // 是否读取结束
+    int video_stream;
+    AVStream *video_st;
+    PacketQueue videoq;
+    double max_frame_duration;      // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
+    struct SwsContext *img_convert_ctx;
+    struct SwsContext *sub_convert_ctx;
+    int eof;
 
-    char *filename;                     // ⽂件名
-    int width, height, xleft, ytop;     // 窗口宽、⾼，x起始坐标，y起始坐标
-    int step;                           // =1 步进播放模式, =0 其他模式
+    char *filename;
+    int width, height, xleft, ytop;
+    int step;
 
 #if CONFIG_AVFILTER
     int vfilter_idx;
@@ -311,10 +301,9 @@ typedef struct VideoState {
     AVFilterGraph *agraph;              // audio filter graph
 #endif
 
-    // 保留最近的相应audio、video、subtitle流的steam index
     int last_video_stream, last_audio_stream, last_subtitle_stream;
 
-    SDL_cond *continue_read_thread;     // 当读取数据队列满了后进⼊休眠时，可以通过该condition唤醒读线程
+    SDL_cond *continue_read_thread;
 } VideoState;
 
 /* options specified by the user */
@@ -930,7 +919,6 @@ static int upload_texture(SDL_Texture **tex, AVFrame *frame, struct SwsContext *
             break;
         case SDL_PIXELFORMAT_IYUV:
             if (frame->linesize[0] > 0 && frame->linesize[1] > 0 && frame->linesize[2] > 0) {
-                // 将图像数据传输到 SDL 纹理
                 ret = SDL_UpdateYUVTexture(*tex, NULL, frame->data[0], frame->linesize[0],
                                                        frame->data[1], frame->linesize[1],
                                                        frame->data[2], frame->linesize[2]);
@@ -945,7 +933,6 @@ static int upload_texture(SDL_Texture **tex, AVFrame *frame, struct SwsContext *
             break;
         default:
             if (frame->linesize[0] < 0) {
-                // 将图像数据传输到 SDL 纹理
                 ret = SDL_UpdateTexture(*tex, NULL, frame->data[0] + frame->linesize[0] * (frame->height - 1), -frame->linesize[0]);
             } else {
                 ret = SDL_UpdateTexture(*tex, NULL, frame->data[0], frame->linesize[0]);
@@ -977,7 +964,6 @@ static void video_image_display(VideoState *is)
     Frame *sp = NULL;
     SDL_Rect rect;
 
-    // 从帧队列去除最新的帧
     vp = frame_queue_peek_last(&is->pictq);
     if (is->subtitle_st) {
         if (frame_queue_nb_remaining(&is->subpq) > 0) {
@@ -1028,7 +1014,6 @@ static void video_image_display(VideoState *is)
     set_sdl_yuv_conversion_mode(vp->frame);
 
     if (!vp->uploaded) {
-        // 将图像数据传输到 SDL 纹理
         if (upload_texture(&is->vid_texture, vp->frame, &is->img_convert_ctx) < 0) {
             set_sdl_yuv_conversion_mode(NULL);
             return;
@@ -1037,12 +1022,10 @@ static void video_image_display(VideoState *is)
         vp->flip_v = vp->frame->linesize[0] < 0;
     }
 
-    // 播放画面，将纹理渲染到屏幕
     SDL_RenderCopyEx(renderer, is->vid_texture, NULL, &rect, 0, NULL, vp->flip_v ? SDL_FLIP_VERTICAL : 0);
     set_sdl_yuv_conversion_mode(NULL);
     if (sp) {
 #if USE_ONEPASS_SUBTITLE_RENDER
-        // 如果有字幕，将字幕纹理渲染到屏幕
         SDL_RenderCopy(renderer, is->sub_texture, NULL, &rect);
 #else
         int i;
