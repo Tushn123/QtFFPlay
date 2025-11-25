@@ -296,7 +296,7 @@ typedef struct VideoState {
     double max_frame_duration;          // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
     struct SwsContext *img_convert_ctx; // 视频尺⼨格式变换
     struct SwsContext *sub_convert_ctx; // 字幕尺⼨格式变换
-    int eof;                            // 是否读取结束
+    int eof;                            // =0未读取结束, =1读取结束
 
     char *filename;                     // ⽂件名
     int width, height, xleft, ytop;     // 窗口宽、⾼，x起始坐标，y起始坐标
@@ -331,9 +331,9 @@ static int audio_disable;
 static int video_disable;
 static int subtitle_disable;
 static const char* wanted_stream_spec[AVMEDIA_TYPE_NB] = {0};
-static int seek_by_bytes = -1;
+static int seek_by_bytes = -1;      // =1 按字节偏移seek（适合FLV、MPEG-TS）, =0 按时间戳seek（适合MP4、MKV）, =-1 自动选择
 static float seek_interval = 10;
-static int display_disable;
+static int display_disable;     //图像显示是否禁用
 static int borderless;
 static int alwaysontop;
 static int startup_volume = 100;
@@ -343,14 +343,18 @@ static int64_t start_time = AV_NOPTS_VALUE;
 static int64_t duration = AV_NOPTS_VALUE;
 static int fast = 0;
 static int genpts = 0;
-static int lowres = 0;
+static int lowres = 0;      // 用户通过命令行设置的低分辨率解码选项, 让解码器输出缩小后的图像
+                            // lowres值    缩放比例     1920×1080 视频输出
+                            //    0       1:1 (原始)      1920×1080
+                            //    1       1:2              960×540
 static int decoder_reorder_pts = -1;
 static int autoexit;
 static int exit_on_keydown;
 static int exit_on_mousedown;
 static int loop = 1;
 static int framedrop = -1;
-static int infinite_buffer = -1;
+static int infinite_buffer = -1;        // 控制是否禁用输入缓冲区大小限制，主要用于实时流播放。
+                                        // =1时禁用，=0时启用，=-1时自动选择(实时流自动启用，普通文件禁用)
 static enum ShowMode show_mode = SHOW_MODE_NONE;
 static const char *audio_codec_name;
 static const char *subtitle_codec_name;
@@ -2122,6 +2126,7 @@ static int audio_thread(void *arg)
 static int decoder_start(Decoder *d, int (*fn)(void *), const char *thread_name, void* arg)
 {
     packet_queue_start(d->queue);
+    // 启动线程: 创建音频/视频/字幕解码线程
     d->decoder_tid = SDL_CreateThread(fn, thread_name, arg);
     if (!d->decoder_tid) {
         av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
@@ -2568,6 +2573,7 @@ static int audio_open(void *opaque, AVChannelLayout *wanted_channel_layout, int 
     return spec.size;
 }
 
+// 创建解码器和解码线程
 /* open a given stream. Return 0 if OK */
 static int stream_component_open(VideoState *is, int stream_index)
 {
@@ -2589,21 +2595,26 @@ static int stream_component_open(VideoState *is, int stream_index)
     if (!avctx)
         return AVERROR(ENOMEM);
 
+    // 将码流中的编解码器信息拷⻉到新分配的编解码器上下⽂结构体
     ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar);
     if (ret < 0)
         goto fail;
     avctx->pkt_timebase = ic->streams[stream_index]->time_base;
 
+    // 根据编解码器ID查找解码器
     codec = avcodec_find_decoder(avctx->codec_id);
 
+    // 获取用户强制指定的的解码器（如果指定了）
     switch(avctx->codec_type){
         case AVMEDIA_TYPE_AUDIO   : is->last_audio_stream    = stream_index; forced_codec_name =    audio_codec_name; break;
         case AVMEDIA_TYPE_SUBTITLE: is->last_subtitle_stream = stream_index; forced_codec_name = subtitle_codec_name; break;
         case AVMEDIA_TYPE_VIDEO   : is->last_video_stream    = stream_index; forced_codec_name =    video_codec_name; break;
     }
+    // 如果用户强制指定了解码器，则使用用户指定的解码器
     if (forced_codec_name)
         codec = avcodec_find_decoder_by_name(forced_codec_name);
     if (!codec) {
+        // 如果用户强制指定了解码器，但找不到，则报错
         if (forced_codec_name) av_log(NULL, AV_LOG_WARNING,
                                       "No codec could be found with name '%s'\n", forced_codec_name);
         else                   av_log(NULL, AV_LOG_WARNING,
@@ -2613,6 +2624,7 @@ static int stream_component_open(VideoState *is, int stream_index)
     }
 
     avctx->codec_id = codec->id;
+    // 如果用户设置的低分辨率解码选项大于解码器支持的最大低分辨率，则使用解码器支持的最大低分辨率
     if (stream_lowres > codec->max_lowres) {
         av_log(avctx, AV_LOG_WARNING, "The maximum value for lowres supported by the decoder is %d\n",
                 codec->max_lowres);
@@ -2620,17 +2632,21 @@ static int stream_component_open(VideoState *is, int stream_index)
     }
     avctx->lowres = stream_lowres;
 
+    // 如果用户设置了快速解码选项，则启用快速解码标志（会牺牲解码质量）
     if (fast)
         avctx->flags2 |= AV_CODEC_FLAG2_FAST;
 
     opts = filter_codec_opts(codec_opts, avctx->codec_id, ic, ic->streams[stream_index], codec);
+    // 设置多线程解码
     if (!av_dict_get(opts, "threads", NULL, 0))
         av_dict_set(&opts, "threads", "auto", 0);
+    // 设置低分辨率解码
     if (stream_lowres)
         av_dict_set_int(&opts, "lowres", stream_lowres, 0);
     if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) {
         goto fail;
     }
+    // 检查是否设置了无效的选项
     if ((t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
         av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
         ret =  AVERROR_OPTION_NOT_FOUND;
@@ -2689,6 +2705,7 @@ static int stream_component_open(VideoState *is, int stream_index)
             is->auddec.start_pts = is->audio_st->start_time;
             is->auddec.start_pts_tb = is->audio_st->time_base;
         }
+        // 启动线程: audio_thread, 创建音频解码线程
         if ((ret = decoder_start(&is->auddec, audio_thread, "audio_decoder", is)) < 0)
             goto out;
         SDL_PauseAudioDevice(audio_dev, 0);
@@ -2699,6 +2716,7 @@ static int stream_component_open(VideoState *is, int stream_index)
 
         if ((ret = decoder_init(&is->viddec, avctx, &is->videoq, is->continue_read_thread)) < 0)
             goto fail;
+        // 启动线程: video_thread, 创建视频解码线程
         if ((ret = decoder_start(&is->viddec, video_thread, "video_decoder", is)) < 0)
             goto out;
         is->queue_attachments_req = 1;
@@ -2709,6 +2727,7 @@ static int stream_component_open(VideoState *is, int stream_index)
 
         if ((ret = decoder_init(&is->subdec, avctx, &is->subtitleq, is->continue_read_thread)) < 0)
             goto fail;
+        // 启动线程: subtitle_thread, 创建字幕解码线程
         if ((ret = decoder_start(&is->subdec, subtitle_thread, "subtitle_decoder", is)) < 0)
             goto out;
         break;
@@ -2739,6 +2758,7 @@ static int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *q
            queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0);
 }
 
+// 判断是否为实时流
 static int is_realtime(AVFormatContext *s)
 {
     if(   !strcmp(s->iformat->name, "rtp")
@@ -2755,6 +2775,7 @@ static int is_realtime(AVFormatContext *s)
     return 0;
 }
 
+// 读取流数据, 解复用后将packet放入队列
 /* this thread gets the stream from the disk or the network */
 static int read_thread(void *arg)
 {
@@ -2791,12 +2812,21 @@ static int read_thread(void *arg)
         ret = AVERROR(ENOMEM);
         goto fail;
     }
+    // 设置中断回调函数, decode_interrupt_cb该函数会在后续的io操作中被周期性调用
+    // avformat_open_input()、avformat_find_stream_info()、av_read_frame()都会触发
     ic->interrupt_callback.callback = decode_interrupt_cb;
     ic->interrupt_callback.opaque = is;
     if (!av_dict_get(format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
     }
+
+    // 打开流, 此步骤做了如下事情：
+    // 1、分配 AVFormatContext
+    // 2、解析 URL / 协议
+    // 3、打开 I/O 通道（本地文件: fopen / open, 网络流: 建立 socket 连接）
+    // 4、探测输入格式（读取文件头部数据、遍历所有注册的 demuxer、调用 read_probe() 评分）
+    // 5、如果探测到输入格式，则根据该格式使用相对应的 demuxer 打开输入流
     err = avformat_open_input(&ic, is->filename, is->iformat, &format_opts);
     if (err < 0) {
         print_error(is->filename, err);
@@ -2822,6 +2852,12 @@ static int read_thread(void *arg)
         AVDictionary **opts = setup_find_stream_info_opts(ic, codec_opts);
         int orig_nb_streams = ic->nb_streams;
 
+        // 探测和完善流信息，通过实际读取和解码部分数据来获取 avformat_open_input 无法直接获取的信息:
+        // 1、为每个流创建临时解码器
+        // 2、循环读取数据包
+        // 3、解码部分帧，获取视频/音频/字幕流的基本信息
+        // 4、计算流参数：时间戳、比特率、码率、帧率、音频采样率、声道布局等
+        // 5、释放临时解码器，保留探测结果
         err = avformat_find_stream_info(ic, opts);
 
         for (i = 0; i < orig_nb_streams; i++)
@@ -2849,6 +2885,7 @@ static int read_thread(void *arg)
     if (!window_title && (t = av_dict_get(ic->metadata, "title", NULL, 0)))
         window_title = av_asprintf("%s - %s", t->value, input_filename);
 
+    // 设置起始播放时间
     /* if seeking requested, we execute it */
     if (start_time != AV_NOPTS_VALUE) {
         int64_t timestamp;
@@ -2869,6 +2906,7 @@ static int read_thread(void *arg)
     if (show_status)
         av_dump_format(ic, 0, is->filename, 0);
 
+    // 遍历所有流，根据stream_specifier选择要打开的流
     for (i = 0; i < ic->nb_streams; i++) {
         AVStream *st = ic->streams[i];
         enum AVMediaType type = st->codecpar->codec_type;
@@ -2908,10 +2946,12 @@ static int read_thread(void *arg)
         AVStream *st = ic->streams[st_index[AVMEDIA_TYPE_VIDEO]];
         AVCodecParameters *codecpar = st->codecpar;
         AVRational sar = av_guess_sample_aspect_ratio(ic, st, NULL);
+        // 根据视频尺寸设置默认窗口大小
         if (codecpar->width)
             set_default_window_size(codecpar->width, codecpar->height, sar);
     }
 
+    // 创建对应的解码器和解码线程
     /* open the streams */
     if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) {
         stream_component_open(is, st_index[AVMEDIA_TYPE_AUDIO]);
@@ -2921,6 +2961,7 @@ static int read_thread(void *arg)
     if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) {
         ret = stream_component_open(is, st_index[AVMEDIA_TYPE_VIDEO]);
     }
+    // 选择怎么显示，如果视频打开成功，就显示视频画⾯，否则，显示⾳频对应的频谱图
     if (is->show_mode == SHOW_MODE_NONE)
         is->show_mode = ret >= 0 ? SHOW_MODE_VIDEO : SHOW_MODE_RDFT;
 
@@ -2935,12 +2976,15 @@ static int read_thread(void *arg)
         goto fail;
     }
 
+    // 如果无限缓冲区未设置，且是实时流，则启用无限缓冲区
     if (infinite_buffer < 0 && is->realtime)
         infinite_buffer = 1;
 
     for (;;) {
+        // 判断用户是否请求退出播放
         if (is->abort_request)
             break;
+        // 暂停状态发生变化时，暂停或播放流（只影响rtsp流）
         if (is->paused != is->last_paused) {
             is->last_paused = is->paused;
             if (is->paused)
@@ -2949,6 +2993,8 @@ static int read_thread(void *arg)
                 av_read_play(ic);
         }
 #if CONFIG_RTSP_DEMUXER || CONFIG_MMSH_PROTOCOL
+        // 针对 RTSP 和 MMSH 协议的特殊处理
+        // 原因: 这些协议暂停后, 服务器可能不会立即停止发送数据, 防止av_read_frame空转循环占用cpu
         if (is->paused &&
                 (!strcmp(ic->iformat->name, "rtsp") ||
                  (ic->pb && !strncmp(input_filename, "mmsh:", 5)))) {
@@ -3081,6 +3127,7 @@ static int read_thread(void *arg)
     return 0;
 }
 
+// 打开流的初始化操作
 static VideoState *stream_open(const char *filename,
                                const AVInputFormat *iformat)
 {
@@ -3099,6 +3146,8 @@ static VideoState *stream_open(const char *filename,
     is->ytop    = 0;
     is->xleft   = 0;
 
+    // 初始化frame队列, 每种队列都限制了队列大小
+    // 1表示保留最后⼀帧，⽤于下⼀次seek时使⽤
     /* start video display */
     if (frame_queue_init(&is->pictq, &is->videoq, VIDEO_PICTURE_QUEUE_SIZE, 1) < 0)
         goto fail;
@@ -3107,20 +3156,24 @@ static VideoState *stream_open(const char *filename,
     if (frame_queue_init(&is->sampq, &is->audioq, SAMPLE_QUEUE_SIZE, 1) < 0)
         goto fail;
 
+    // 初始化packet队列
     if (packet_queue_init(&is->videoq) < 0 ||
         packet_queue_init(&is->audioq) < 0 ||
         packet_queue_init(&is->subtitleq) < 0)
         goto fail;
 
+    // 创建条件变量，用于在读取数据队列满了后进⼊休眠时，可以通过该condition唤醒读线程
     if (!(is->continue_read_thread = SDL_CreateCond())) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n", SDL_GetError());
         goto fail;
     }
 
+    // 初始化时钟
     init_clock(&is->vidclk, &is->videoq.serial);
     init_clock(&is->audclk, &is->audioq.serial);
     init_clock(&is->extclk, &is->extclk.serial);
     is->audio_clock_serial = -1;
+    // 将初始音量转为 SDL 音频系统可用的音量值(防止非法音量值)
     if (startup_volume < 0)
         av_log(NULL, AV_LOG_WARNING, "-volume=%d < 0, setting to 0\n", startup_volume);
     if (startup_volume > 100)
@@ -3128,8 +3181,10 @@ static VideoState *stream_open(const char *filename,
     startup_volume = av_clip(startup_volume, 0, 100);
     startup_volume = av_clip(SDL_MIX_MAXVOLUME * startup_volume / 100, 0, SDL_MIX_MAXVOLUME);
     is->audio_volume = startup_volume;
+    // 默认不静音
     is->muted = 0;
     is->av_sync_type = av_sync_type;
+    // 启动线程: read_thread, 创建读线程, 读取流数据, 解复用后将packet放入队列
     is->read_tid     = SDL_CreateThread(read_thread, "read_thread", is);
     if (!is->read_tid) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateThread(): %s\n", SDL_GetError());
@@ -3693,6 +3748,7 @@ int main(int argc, char **argv)
 
     show_banner(argc, argv, options);
 
+    // 解析命令行参数
     parse_options(NULL, argc, argv, options, opt_input_file);
 
     if (!input_filename) {
@@ -3717,6 +3773,7 @@ int main(int argc, char **argv)
     }
     if (display_disable)
         flags &= ~SDL_INIT_VIDEO;
+    // 初始化SDL的视频、音频、定时器子系统，通过flags参数指定要初始化的子系统
     if (SDL_Init (flags)) {
         av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL - %s\n", SDL_GetError());
         av_log(NULL, AV_LOG_FATAL, "(Did you set the DISPLAY variable?)\n");
@@ -3742,15 +3799,19 @@ int main(int argc, char **argv)
 #ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
         SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
 #endif
+        // 创建窗口，通过program_name、default_width、default_height、flags参数指定窗口的属性
         window = SDL_CreateWindow(program_name, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, default_width, default_height, flags);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         if (window) {
+            // 创建渲染器, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC 表示使用硬件加速和垂直同步
             renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
             if (!renderer) {
                 av_log(NULL, AV_LOG_WARNING, "Failed to initialize a hardware accelerated renderer: %s\n", SDL_GetError());
+                // 如果硬件加速失败，则使用软件渲染
                 renderer = SDL_CreateRenderer(window, -1, 0);
             }
             if (renderer) {
+                // 获取渲染器信息
                 if (!SDL_GetRendererInfo(renderer, &renderer_info))
                     av_log(NULL, AV_LOG_VERBOSE, "Initialized %s renderer.\n", renderer_info.name);
             }
@@ -3761,12 +3822,14 @@ int main(int argc, char **argv)
         }
     }
 
+    // 打开流的初始化操作
     is = stream_open(input_filename, file_iformat);
     if (!is) {
         av_log(NULL, AV_LOG_FATAL, "Failed to initialize VideoState!\n");
         do_exit(NULL);
     }
 
+    // sdl事件循环, 等待键盘和鼠标事件
     event_loop(is);
 
     /* never returns */
