@@ -142,7 +142,7 @@ typedef struct AudioParams {
 
 typedef struct Clock {
     double pts;           // 时钟基础, 当前帧(待播放)显示时间戳，播放后，当前帧变成上⼀帧，单位为秒
-    double pts_drift;     // 当前pts与当前系统时钟的差值, audio、video对于该值是独⽴的
+    double pts_drift;     // 记录了"媒体时间与系统时间的偏移量", audio、video对于该值是独⽴的
     double last_updated;  // 最后⼀次更新的系统时钟
     double speed;         // 时钟速度控制，⽤于控制播放速度
     int serial;           // 播放序列，所谓播放序列就是⼀段连续的播放动作，⼀个seek操作会启动⼀段新的播放序列，会加1
@@ -174,7 +174,9 @@ typedef struct FrameQueue {
     int size;                       // 当前总帧数
     int max_size;                   // 可存储最⼤帧数
     int keep_last;                  // =1时表示保留最后⼀帧，⽤于下⼀次seek时使⽤
-    int rindex_shown;               // 初始化为0，配合keep_last=1使⽤,
+    int rindex_shown;               // 当前帧相对于 rindex 的偏移量，值只有 0 或 1
+                                    // =0代表rindex 位置的帧还没显示过，它就是"当前帧"
+                                    // =1代表rindex 位置的帧已经显示过，它是"上一帧", 当前带渲染的帧为rindex+rindex_shown
     SDL_mutex *mutex;
     SDL_cond *cond;
     PacketQueue *pktq;
@@ -1008,10 +1010,12 @@ static void video_image_display(VideoState *is)
     Frame *sp = NULL;
     SDL_Rect rect;
 
-    // 从帧队列去除最新的帧
+    // 获取要渲染的帧
     vp = frame_queue_peek_last(&is->pictq);
+    // 如果有字幕，则渲染字幕
     if (is->subtitle_st) {
         if (frame_queue_nb_remaining(&is->subpq) > 0) {
+            // 获取字幕帧
             sp = frame_queue_peek(&is->subpq);
 
             if (vp->pts >= sp->pts + ((float) sp->sub.start_display_time / 1000)) {
@@ -1055,9 +1059,12 @@ static void video_image_display(VideoState *is)
         }
     }
 
+    // 计算视频在窗口的实际位置
     calculate_display_rect(&rect, is->xleft, is->ytop, is->width, is->height, vp->width, vp->height, vp->sar);
+    // 告诉 SDL 使用正确的颜色空间标准将 YUV 转换为 RGB（屏幕显示需要是RGB）
     set_sdl_yuv_conversion_mode(vp->frame);
 
+    // 如果图像数据未上传到 SDL 纹理，则上传
     if (!vp->uploaded) {
         // 将图像数据传输到 SDL 纹理
         if (upload_texture(&is->vid_texture, vp->frame, &is->img_convert_ctx) < 0) {
@@ -1402,8 +1409,10 @@ static void video_display(VideoState *is)
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     if (is->audio_st && is->show_mode != SHOW_MODE_VIDEO)
+        // 渲染音频的波形/频谱
         video_audio_display(is);
     else if (is->video_st)
+        // 渲染视频画面
         video_image_display(is);
     SDL_RenderPresent(renderer);
 }
@@ -1534,17 +1543,20 @@ static void stream_toggle_pause(VideoState *is)
     is->paused = is->audclk.paused = is->vidclk.paused = is->extclk.paused = !is->paused;
 }
 
+// 切换暂停/播放
 static void toggle_pause(VideoState *is)
 {
     stream_toggle_pause(is);
     is->step = 0;
 }
 
+// 切换静音/取消静音
 static void toggle_mute(VideoState *is)
 {
     is->muted = !is->muted;
 }
 
+// 更新音量
 static void update_volume(VideoState *is, int sign, double step)
 {
     double volume_level = is->audio_volume ? (20 * log(is->audio_volume / (double)SDL_MIX_MAXVOLUME) / log(10)) : -1000.0;
@@ -1552,6 +1564,7 @@ static void update_volume(VideoState *is, int sign, double step)
     is->audio_volume = av_clip(is->audio_volume == new_volume ? (is->audio_volume + sign) : new_volume, 0, SDL_MIX_MAXVOLUME);
 }
 
+// 逐帧代码
 static void step_to_next_frame(VideoState *is)
 {
     /* if the stream is paused unpause it, then step */
@@ -1753,9 +1766,12 @@ display:
         /* display picture */
         // force_refresh不为1，则不再次渲染
         if (!display_disable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown)
+            // 链路追踪: 5.8、video_display, 渲染画面
             video_display(is);
     }
     is->force_refresh = 0;
+    //  ffplay 在控制台实时打印播放状态信息
+    // 如：   7.23 A-V:  0.001 fd=   0 aq=  234KB vq= 1536KB sq=    0B f=0/0
     if (show_status) {
         AVBPrint buf;
         static int64_t last_time;
@@ -2132,6 +2148,7 @@ static int audio_thread(void *arg)
                     is->audio_filter_src.freq           != frame->sample_rate ||
                     is->auddec.pkt_serial               != last_serial;
 
+                // 音频重采样
                 if (reconfigure) {
                     char buf1[1024], buf2[1024];
                     av_channel_layout_describe(&is->audio_filter_src.ch_layout, buf1, sizeof(buf1));
@@ -2152,9 +2169,11 @@ static int audio_thread(void *arg)
                         goto the_end;
                 }
 
+            // 将音频帧送入滤镜链, 进行音频重采样
             if ((ret = av_buffersrc_add_frame(is->in_audio_filter, frame)) < 0)
                 goto the_end;
 
+            // 从滤镜链获取音频帧
             while ((ret = av_buffersink_get_frame_flags(is->out_audio_filter, frame, 0)) >= 0) {
                 tb = av_buffersink_get_time_base(is->out_audio_filter);
 #endif
@@ -2167,6 +2186,7 @@ static int audio_thread(void *arg)
                 af->duration = av_q2d((AVRational){frame->nb_samples, frame->sample_rate});
 
                 av_frame_move_ref(af->frame, frame);
+                // 链路追踪: 4.3、frame_queue_peek_writable, 音频frame入队
                 frame_queue_push(&is->sampq);
 
 #if CONFIG_AVFILTER
@@ -2372,6 +2392,7 @@ static void update_sample_display(VideoState *is, short *samples, int samples_si
 
 /* return the wanted number of samples to get better sync if sync_type is video
  * or external master clock */
+// 音频同步, 返回采样数
 static int synchronize_audio(VideoState *is, int nb_samples)
 {
     int wanted_nb_samples = nb_samples;
@@ -2427,6 +2448,7 @@ static int audio_decode_frame(VideoState *is)
     int wanted_nb_samples;
     Frame *af;
 
+    // 暂停时直接返回，SDL 会播放静音
     if (is->paused)
         return -1;
 
@@ -2440,15 +2462,23 @@ static int audio_decode_frame(VideoState *is)
 #endif
         if (!(af = frame_queue_peek_readable(&is->sampq)))
             return -1;
+        // 链路追踪: 4.5、frame_queue_next, 音频frame出队, 循环是为了丢弃旧的serial的音频帧
         frame_queue_next(&is->sampq);
     } while (af->serial != is->audioq.serial);
 
+    // 计算音频帧的大小
     data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels,
                                            af->frame->nb_samples,
                                            af->frame->format, 1);
-
+    // 链路追踪: 4.6、synchronize_audio, 音频同步
+    // 频同步是通过"输出多一点或少一点采样点"来实现加速/减速, 此操作通过后续的重采样器来实现
     wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
 
+    // 重采样器配置, 重新配置 swr_ctx 的情况如下:
+    // 1、采样格式变化
+    // 2、声道布局变化
+    // 3、采样率变化
+    // 4、需要同步调整但还没有 swr_ctx
     if (af->frame->format        != is->audio_src.fmt            ||
         av_channel_layout_compare(&af->frame->ch_layout, &is->audio_src.ch_layout) ||
         af->frame->sample_rate   != is->audio_src.freq           ||
@@ -2472,6 +2502,7 @@ static int audio_decode_frame(VideoState *is)
         is->audio_src.fmt = af->frame->format;
     }
 
+    // 执行重采样
     if (is->swr_ctx) {
         const uint8_t **in = (const uint8_t **)af->frame->extended_data;
         uint8_t **out = &is->audio_buf1;
@@ -2483,6 +2514,7 @@ static int audio_decode_frame(VideoState *is)
             return -1;
         }
         if (wanted_nb_samples != af->frame->nb_samples) {
+            // 设置补偿
             if (swr_set_compensation(is->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * is->audio_tgt.freq / af->frame->sample_rate,
                                         wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate) < 0) {
                 av_log(NULL, AV_LOG_ERROR, "swr_set_compensation() failed\n");
@@ -2492,6 +2524,7 @@ static int audio_decode_frame(VideoState *is)
         av_fast_malloc(&is->audio_buf1, &is->audio_buf1_size, out_size);
         if (!is->audio_buf1)
             return AVERROR(ENOMEM);
+        // 执行转换 
         len2 = swr_convert(is->swr_ctx, out, out_count, in, af->frame->nb_samples);
         if (len2 < 0) {
             av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
@@ -2505,6 +2538,7 @@ static int audio_decode_frame(VideoState *is)
         is->audio_buf = is->audio_buf1;
         resampled_data_size = len2 * is->audio_tgt.ch_layout.nb_channels * av_get_bytes_per_sample(is->audio_tgt.fmt);
     } else {
+        // 如果不需要重采样，则直接使用原始数据
         is->audio_buf = af->frame->data[0];
         resampled_data_size = data_size;
     }
@@ -2538,6 +2572,7 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
 
     while (len > 0) {
         if (is->audio_buf_index >= is->audio_buf_size) {
+            // 链路追踪: 4.4、audio_decode_frame, 音频frame出队
            audio_size = audio_decode_frame(is);
            if (audio_size < 0) {
                 /* if error, just output silence */
@@ -2550,18 +2585,26 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
            }
            is->audio_buf_index = 0;
         }
+        // 计算剩余可复制的数据量
         len1 = is->audio_buf_size - is->audio_buf_index;
+        // 如果剩余可复制的数据量大于需要复制的数据量，则只复制需要复制的数据量
         if (len1 > len)
             len1 = len;
+        // 非静音 + 有数据 + 满音量, 则直接复制数据
         if (!is->muted && is->audio_buf && is->audio_volume == SDL_MIX_MAXVOLUME)
             memcpy(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, len1);
         else {
+            // 静音 或 无数据, 清零 (输出静音)
             memset(stream, 0, len1);
+            // 非静音 + 有数据 + 非满音量, 则混合数据(实现音量调节) 
             if (!is->muted && is->audio_buf)
                 SDL_MixAudioFormat(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, AUDIO_S16SYS, len1, is->audio_volume);
         }
+        // 更新剩余需要复制的数据量
         len -= len1;
+        // 更新复制数据的指针
         stream += len1;
+        // 更新已复制的数据量
         is->audio_buf_index += len1;
     }
     is->audio_write_buf_size = is->audio_buf_size - is->audio_buf_index;
@@ -3310,6 +3353,7 @@ fail:
     return is;
 }
 
+// 切换音频/视频/字幕轨道
 static void stream_cycle_channel(VideoState *is, int codec_type)
 {
     AVFormatContext *ic = is->ic;
@@ -3388,7 +3432,7 @@ static void stream_cycle_channel(VideoState *is, int codec_type)
     stream_component_open(is, stream_index);
 }
 
-
+// 切换全屏
 static void toggle_full_screen(VideoState *is)
 {
     is_full_screen = !is_full_screen;
@@ -3429,6 +3473,7 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
     }
 }
 
+// 切换章节
 static void seek_chapter(VideoState *is, int incr)
 {
     int64_t pos = get_master_clock(is) * AV_TIME_BASE;
@@ -3513,6 +3558,7 @@ static void event_loop(VideoState *cur_stream)
                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_SUBTITLE);
                 break;
             case SDLK_w:
+                // 切换视频滤镜或显示模式
 #if CONFIG_AVFILTER
                 if (cur_stream->show_mode == SHOW_MODE_VIDEO && cur_stream->vfilter_idx < nb_vfilters - 1) {
                     if (++cur_stream->vfilter_idx >= nb_vfilters)
@@ -3853,6 +3899,7 @@ int main(int argc, char **argv)
     int flags;
     VideoState *is;
 
+    // Windows 平台特有的安全措施，用于防止 DLL 劫持攻击
     init_dynload();
 
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
