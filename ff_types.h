@@ -8,6 +8,9 @@
 
 #include "ff_define.h"
 
+/* Forward declaration */
+struct FFPlayer;
+
 typedef struct MyAVPacketList {
     AVPacket *pkt;      //解封装后的数据
     int serial;         //播放序列，它的值来自PacketQueue的serial的赋值
@@ -96,6 +99,7 @@ typedef struct Decoder {
 } Decoder;
 
 typedef struct VideoState {
+    struct FFPlayer *ffp;               // 指向播放器实例，用于线程函数访问FFPlayer
     SDL_Thread *read_tid;               // 读线程句柄
     const AVInputFormat *iformat;       // 指向demuxer
     int abort_request;                  // =1时请求退出播放

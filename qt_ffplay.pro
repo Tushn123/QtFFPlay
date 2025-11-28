@@ -5,6 +5,7 @@ CONFIG += console
 SOURCES += \
     main.c \
     ffplay.c \
+    ff_ffplayer.c \
     ff_queue.c \
     ff_decoder.c \
     ff_clock.c \

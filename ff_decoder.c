@@ -39,7 +39,7 @@ int decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, SDL_cond
     return 0;
 }
 
-int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
+int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub, int decoder_reorder_pts) {
     int ret = AVERROR(EAGAIN);
 
     for (;;) {
