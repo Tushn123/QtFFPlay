@@ -107,9 +107,16 @@ win32 {
                 $$PWD/lib/SDL2/x64/SDL2.lib     \
                 ws2_32.lib Secur32.lib Bcrypt.lib Strmiids.lib shell32.lib Ole32.lib
         
+        # 使用 C11 标准编译 C 文件 (MSVC 2019 16.8+ 支持)
+        QMAKE_CFLAGS += /std:c11
+        
+        # 设置源文件编码为 UTF-8
+        QMAKE_CFLAGS += /utf-8
+        QMAKE_CXXFLAGS += /utf-8
+        
         # 禁用警告
-        QMAKE_CFLAGS += /wd4996 /wd4133 /wd4090 /wd4244 /wd4305 /wd4018
-        QMAKE_CXXFLAGS += /wd4996
+        QMAKE_CFLAGS += /wd4996 /wd4133 /wd4090 /wd4244 /wd4305 /wd4018 /wd4267 /wd4819
+        QMAKE_CXXFLAGS += /wd4996 /wd4819
         
         # Debug 模式：生成完整调试信息
         CONFIG(debug, debug|release) {
