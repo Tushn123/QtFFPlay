@@ -3,9 +3,21 @@ CONFIG += c++11
 CONFIG += console
 
 SOURCES += \
+    main.c \
     ffplay.c \
+    ff_queue.c \
+    ff_decoder.c \
+    ff_clock.c \
     cmdutils.c \
     opt_common.c
+
+HEADERS += \
+    ff_define.h \
+    ff_types.h \
+    ff_queue.h \
+    ff_decoder.h \
+    ff_clock.h \
+    ffplay.h
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/
