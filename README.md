@@ -1,0 +1,1 @@
+移植ffplay.c到qt程序，用于学习、调试、改造ffplay
