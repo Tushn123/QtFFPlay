@@ -29,9 +29,6 @@
 const char program_name[] = "ffplay";
 const int program_birth_year = 2025;
 
-/* Global FFPlayer instance */
-static FFPlayer *g_ffp = NULL;
-
 /* Command line options - these will be copied to FFPlayer */
 static const AVInputFormat *file_iformat;
 static const char *input_filename;
@@ -85,275 +82,9 @@ static int filter_nbthreads = 0;
 /* current context */
 static int is_full_screen;
 
-
-static void do_exit(FFPlayer *ffp, VideoState *is)
-{
-    if (is) {
-        stream_close(ffp, is);
-    }
-    if (ffp->renderer)
-        SDL_DestroyRenderer(ffp->renderer);
-    if (ffp->window)
-        SDL_DestroyWindow(ffp->window);
-    uninit_opts();
-#if CONFIG_AVFILTER
-    av_freep(&ffp->vfilters_list);
-#endif
-    avformat_network_deinit();
-    if (ffp->show_status)
-        printf("\n");
-    SDL_Quit();
-    ffp_destroy(ffp);
-    av_log(NULL, AV_LOG_QUIET, "%s", "");
-    exit(0);
-}
-
 static void sigterm_handler(int sig)
 {
     exit(123);
-}
-
-static void refresh_loop_wait_event(FFPlayer *ffp, VideoState *is, SDL_Event *event) {
-    double remaining_time = 0.0;
-    SDL_PumpEvents();
-    while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT)) {
-        if (!ffp->cursor_hidden && av_gettime_relative() - ffp->cursor_last_shown > CURSOR_HIDE_DELAY) {
-            SDL_ShowCursor(0);
-            ffp->cursor_hidden = 1;
-        }
-        if (remaining_time > 0.0)
-            av_usleep((int64_t)(remaining_time * 1000000.0));
-        remaining_time = REFRESH_RATE;
-        if (is->show_mode != SHOW_MODE_NONE && (!is->paused || is->force_refresh))
-            video_refresh(ffp, is, &remaining_time);
-        SDL_PumpEvents();
-    }
-}
-
-static void seek_chapter(VideoState *is, int incr)
-{
-    int64_t pos = get_master_clock(is) * AV_TIME_BASE;
-    int i;
-
-    if (!is->ic->nb_chapters)
-        return;
-
-    /* find the current chapter */
-    for (i = 0; i < is->ic->nb_chapters; i++) {
-        AVChapter *ch = is->ic->chapters[i];
-        if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
-            i--;
-            break;
-        }
-    }
-
-    i += incr;
-    i = FFMAX(i, 0);
-    if (i >= is->ic->nb_chapters)
-        return;
-
-    av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
-    stream_seek(is, av_rescale_q(is->ic->chapters[i]->start, is->ic->chapters[i]->time_base,
-                                 AV_TIME_BASE_Q), 0, 0);
-}
-
-/* handle an event sent by the GUI */
-static void event_loop(FFPlayer *ffp, VideoState *cur_stream)
-{
-    SDL_Event event;
-    double incr, pos, frac;
-
-    for (;;) {
-        double x;
-        refresh_loop_wait_event(ffp, cur_stream, &event);
-        switch (event.type) {
-        case SDL_KEYDOWN:
-            if (ffp->exit_on_keydown || event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q) {
-                do_exit(ffp, cur_stream);
-                break;
-            }
-            if (!cur_stream->width)
-                continue;
-            switch (event.key.keysym.sym) {
-            case SDLK_f:
-                toggle_full_screen(ffp, cur_stream);
-                cur_stream->force_refresh = 1;
-                break;
-            case SDLK_p:
-            case SDLK_SPACE:
-                toggle_pause(cur_stream);
-                break;
-            case SDLK_m:
-                toggle_mute(cur_stream);
-                break;
-            case SDLK_KP_MULTIPLY:
-            case SDLK_0:
-                update_volume(cur_stream, 1, SDL_VOLUME_STEP);
-                break;
-            case SDLK_KP_DIVIDE:
-            case SDLK_9:
-                update_volume(cur_stream, -1, SDL_VOLUME_STEP);
-                break;
-            case SDLK_s:
-                step_to_next_frame(cur_stream);
-                break;
-            case SDLK_a:
-                stream_cycle_channel(ffp, cur_stream, AVMEDIA_TYPE_AUDIO);
-                break;
-            case SDLK_v:
-                stream_cycle_channel(ffp, cur_stream, AVMEDIA_TYPE_VIDEO);
-                break;
-            case SDLK_c:
-                stream_cycle_channel(ffp, cur_stream, AVMEDIA_TYPE_VIDEO);
-                stream_cycle_channel(ffp, cur_stream, AVMEDIA_TYPE_AUDIO);
-                stream_cycle_channel(ffp, cur_stream, AVMEDIA_TYPE_SUBTITLE);
-                break;
-            case SDLK_t:
-                stream_cycle_channel(ffp, cur_stream, AVMEDIA_TYPE_SUBTITLE);
-                break;
-            case SDLK_w:
-#if CONFIG_AVFILTER
-                if (cur_stream->show_mode == SHOW_MODE_VIDEO && cur_stream->vfilter_idx < ffp->nb_vfilters - 1) {
-                    if (++cur_stream->vfilter_idx >= ffp->nb_vfilters)
-                        cur_stream->vfilter_idx = 0;
-                } else {
-                    cur_stream->vfilter_idx = 0;
-                    toggle_audio_display(cur_stream);
-                }
-#else
-                toggle_audio_display(cur_stream);
-#endif
-                break;
-            case SDLK_PAGEUP:
-                if (cur_stream->ic->nb_chapters <= 1) {
-                    incr = 600.0;
-                    goto do_seek;
-                }
-                seek_chapter(cur_stream, 1);
-                break;
-            case SDLK_PAGEDOWN:
-                if (cur_stream->ic->nb_chapters <= 1) {
-                    incr = -600.0;
-                    goto do_seek;
-                }
-                seek_chapter(cur_stream, -1);
-                break;
-            case SDLK_LEFT:
-                incr = ffp->seek_interval ? -ffp->seek_interval : -10.0;
-                goto do_seek;
-            case SDLK_RIGHT:
-                incr = ffp->seek_interval ? ffp->seek_interval : 10.0;
-                goto do_seek;
-            case SDLK_UP:
-                incr = 60.0;
-                goto do_seek;
-            case SDLK_DOWN:
-                incr = -60.0;
-            do_seek:
-                    if (ffp->seek_by_bytes) {
-                        pos = -1;
-                        if (pos < 0 && cur_stream->video_stream >= 0)
-                            pos = frame_queue_last_pos(&cur_stream->pictq);
-                        if (pos < 0 && cur_stream->audio_stream >= 0)
-                            pos = frame_queue_last_pos(&cur_stream->sampq);
-                        if (pos < 0)
-                            pos = avio_tell(cur_stream->ic->pb);
-                        if (cur_stream->ic->bit_rate)
-                            incr *= cur_stream->ic->bit_rate / 8.0;
-                        else
-                            incr *= 180000.0;
-                        pos += incr;
-                        stream_seek(cur_stream, pos, incr, 1);
-                    } else {
-                        pos = get_master_clock(cur_stream);
-                        if (isnan(pos))
-                            pos = (double)cur_stream->seek_pos / AV_TIME_BASE;
-                        pos += incr;
-                        if (cur_stream->ic->start_time != AV_NOPTS_VALUE && pos < cur_stream->ic->start_time / (double)AV_TIME_BASE)
-                            pos = cur_stream->ic->start_time / (double)AV_TIME_BASE;
-                        stream_seek(cur_stream, (int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), 0);
-                    }
-                break;
-            default:
-                break;
-            }
-            break;
-        case SDL_MOUSEBUTTONDOWN:
-            if (ffp->exit_on_mousedown) {
-                do_exit(ffp, cur_stream);
-                break;
-            }
-            if (event.button.button == SDL_BUTTON_LEFT) {
-                static int64_t last_mouse_left_click = 0;
-                if (av_gettime_relative() - last_mouse_left_click <= 500000) {
-                    toggle_full_screen(ffp, cur_stream);
-                    cur_stream->force_refresh = 1;
-                    last_mouse_left_click = 0;
-                } else {
-                    last_mouse_left_click = av_gettime_relative();
-                }
-            }
-        case SDL_MOUSEMOTION:
-            if (ffp->cursor_hidden) {
-                SDL_ShowCursor(1);
-                ffp->cursor_hidden = 0;
-            }
-            ffp->cursor_last_shown = av_gettime_relative();
-            if (event.type == SDL_MOUSEBUTTONDOWN) {
-                if (event.button.button != SDL_BUTTON_RIGHT)
-                    break;
-                x = event.button.x;
-            } else {
-                if (!(event.motion.state & SDL_BUTTON_RMASK))
-                    break;
-                x = event.motion.x;
-            }
-                if (ffp->seek_by_bytes || cur_stream->ic->duration <= 0) {
-                    uint64_t size =  avio_size(cur_stream->ic->pb);
-                    stream_seek(cur_stream, size*x/cur_stream->width, 0, 1);
-                } else {
-                    int64_t ts;
-                    int ns, hh, mm, ss;
-                    int tns, thh, tmm, tss;
-                    tns  = cur_stream->ic->duration / 1000000LL;
-                    thh  = tns / 3600;
-                    tmm  = (tns % 3600) / 60;
-                    tss  = (tns % 60);
-                    frac = x / cur_stream->width;
-                    ns   = frac * tns;
-                    hh   = ns / 3600;
-                    mm   = (ns % 3600) / 60;
-                    ss   = (ns % 60);
-                    av_log(NULL, AV_LOG_INFO,
-                           "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)       \n", frac*100,
-                            hh, mm, ss, thh, tmm, tss);
-                    ts = frac * cur_stream->ic->duration;
-                    if (cur_stream->ic->start_time != AV_NOPTS_VALUE)
-                        ts += cur_stream->ic->start_time;
-                    stream_seek(cur_stream, ts, 0, 0);
-                }
-            break;
-        case SDL_WINDOWEVENT:
-            switch (event.window.event) {
-                case SDL_WINDOWEVENT_SIZE_CHANGED:
-                    ffp->screen_width  = cur_stream->width  = event.window.data1;
-                    ffp->screen_height = cur_stream->height = event.window.data2;
-                    if (cur_stream->vis_texture) {
-                        SDL_DestroyTexture(cur_stream->vis_texture);
-                        cur_stream->vis_texture = NULL;
-                    }
-                case SDL_WINDOWEVENT_EXPOSED:
-                    cur_stream->force_refresh = 1;
-            }
-            break;
-        case SDL_QUIT:
-        case FF_QUIT_EVENT:
-            do_exit(ffp, cur_stream);
-            break;
-        default:
-            break;
-        }
-    }
 }
 
 static int opt_width(void *optctx, const char *opt, const char *arg)
@@ -604,8 +335,6 @@ static void ffp_copy_options_from_cmdline(FFPlayer *ffp)
 /* Called from the main */
 int main(int argc, char **argv)
 {
-    int flags;
-    VideoState *is;
     FFPlayer *ffp;
 
     init_dynload();
@@ -640,80 +369,34 @@ int main(int argc, char **argv)
         av_log(NULL, AV_LOG_FATAL, "Failed to create FFPlayer!\n");
         exit(1);
     }
-    g_ffp = ffp;
 
     /* Copy command line options to FFPlayer */
     ffp_copy_options_from_cmdline(ffp);
 
-    if (ffp->display_disable) {
-        ffp->video_disable = 1;
-    }
-    flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
-    if (ffp->audio_disable)
-        flags &= ~SDL_INIT_AUDIO;
-    else {
-        /* Try to work around an occasional ALSA buffer underflow issue when the
-         * period size is NPOT due to ALSA resampling by forcing the buffer size. */
-        if (!SDL_getenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE"))
-            SDL_setenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE","1", 1);
-    }
-    if (ffp->display_disable)
-        flags &= ~SDL_INIT_VIDEO;
-    if (SDL_Init (flags)) {
-        av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL - %s\n", SDL_GetError());
-        av_log(NULL, AV_LOG_FATAL, "(Did you set the DISPLAY variable?)\n");
+    /* Initialize SDL */
+    if (ffp_init_sdl(ffp) < 0) {
+        ffp_destroy(ffp);
         exit(1);
     }
 
-    SDL_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
-    SDL_EventState(SDL_USEREVENT, SDL_IGNORE);
-
-    if (!ffp->display_disable) {
-        int flags = SDL_WINDOW_HIDDEN;
-        if (ffp->alwaysontop)
-#if SDL_VERSION_ATLEAST(2,0,5)
-            flags |= SDL_WINDOW_ALWAYS_ON_TOP;
-#else
-            av_log(NULL, AV_LOG_WARNING, "Your SDL version doesn't support SDL_WINDOW_ALWAYS_ON_TOP. Feature will be inactive.\n");
-#endif
-        if (ffp->borderless)
-            flags |= SDL_WINDOW_BORDERLESS;
-        else
-            flags |= SDL_WINDOW_RESIZABLE;
-
-#ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
-        SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
-#endif
-        ffp->window = SDL_CreateWindow(program_name, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, ffp->default_width, ffp->default_height, flags);
-        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-        if (ffp->window) {
-            ffp->renderer = SDL_CreateRenderer(ffp->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-            if (!ffp->renderer) {
-                av_log(NULL, AV_LOG_WARNING, "Failed to initialize a hardware accelerated renderer: %s\n", SDL_GetError());
-                ffp->renderer = SDL_CreateRenderer(ffp->window, -1, 0);
-            }
-            if (ffp->renderer) {
-                if (!SDL_GetRendererInfo(ffp->renderer, &ffp->renderer_info))
-                    av_log(NULL, AV_LOG_VERBOSE, "Initialized %s renderer.\n", ffp->renderer_info.name);
-            }
-        }
-        if (!ffp->window || !ffp->renderer || !ffp->renderer_info.num_texture_formats) {
-            av_log(NULL, AV_LOG_FATAL, "Failed to create window or renderer: %s", SDL_GetError());
-            do_exit(ffp, NULL);
-        }
+    /* Create window and renderer */
+    if (ffp_create_window(ffp) < 0) {
+        ffp_shutdown(ffp);
+        exit(1);
     }
 
-    is = stream_open(ffp, ffp->input_filename, ffp->iformat);
-    if (!is) {
+    /* Prepare and open the stream */
+    if (ffp_prepare_async(ffp, ffp->input_filename) < 0) {
         av_log(NULL, AV_LOG_FATAL, "Failed to initialize VideoState!\n");
-        do_exit(ffp, NULL);
+        ffp_shutdown(ffp);
+        exit(1);
     }
-    ffp->is = is;
 
-    event_loop(ffp, is);
+    /* Run the event loop */
+    ffp_event_loop(ffp);
 
-    /* never returns */
+    /* Clean up */
+    ffp_shutdown(ffp);
 
     return 0;
 }
-

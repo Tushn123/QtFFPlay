@@ -59,6 +59,7 @@ void stream_close(FFPlayer *ffp, VideoState *is);
 int stream_component_open(FFPlayer *ffp, VideoState *is, int stream_index);
 VideoState *stream_open(FFPlayer *ffp, const char *filename, const AVInputFormat *iformat);
 void stream_seek(VideoState *is, int64_t pos, int64_t rel, int by_bytes);
+void seek_chapter(FFPlayer *ffp, int incr);
 void stream_toggle_pause(VideoState *is);
 void toggle_pause(VideoState *is);
 void toggle_mute(VideoState *is);
@@ -73,5 +74,9 @@ int decode_interrupt_cb(void *ctx);
 int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *queue);
 int is_realtime(AVFormatContext *s);
 int read_thread(void *arg);
+
+/* Event loop internal functions (called by FFPlayer) */
+void refresh_loop_wait_event(FFPlayer *ffp, SDL_Event *event);
+void do_event_loop(FFPlayer *ffp);
 
 #endif /* FFPLAY_H */
