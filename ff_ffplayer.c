@@ -23,6 +23,45 @@
 #include "ffplay.h"
 #include "cmdutils.h"
 
+/* 全局初始化状态 */
+static int g_ffp_global_init_done = 0;
+
+/*
+ * =============================================================================
+ * 全局初始化/反初始化
+ * =============================================================================
+ */
+
+void ffp_global_init(void)
+{
+    if (g_ffp_global_init_done)
+        return;
+
+    /* 设置日志 */
+    av_log_set_flags(AV_LOG_SKIP_REPEATED);
+
+    /* 注册设备 */
+#if CONFIG_AVDEVICE
+    avdevice_register_all();
+#endif
+
+    /* 初始化网络 */
+    avformat_network_init();
+
+    g_ffp_global_init_done = 1;
+}
+
+void ffp_global_uninit(void)
+{
+    if (!g_ffp_global_init_done)
+        return;
+
+    /* 清理网络 */
+    avformat_network_deinit();
+
+    g_ffp_global_init_done = 0;
+}
+
 /*
  * =============================================================================
  * FFPlayer 生命周期管理
@@ -281,7 +320,6 @@ void ffp_shutdown(FFPlayer *ffp)
 #if CONFIG_AVFILTER
     av_freep(&ffp->vfilters_list);
 #endif
-    avformat_network_deinit();
     if (ffp->show_status)
         printf("\n");
     SDL_Quit();
