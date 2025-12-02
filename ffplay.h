@@ -11,6 +11,7 @@
 #include "ff_decoder.h"
 #include "ff_clock.h"
 #include "ff_ffplayer.h"
+#include "ff_vout.h"
 
 /* extern global variables - kept for command line option parsing compatibility */
 extern const char program_name[];
@@ -18,10 +19,9 @@ extern const int program_birth_year;
 
 /* Video rendering functions */
 void fill_rectangle(FFPlayer *ffp, int x, int y, int w, int h);
-int realloc_texture(FFPlayer *ffp, SDL_Texture **texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blendmode, int init_texture);
+int realloc_texture(FFPlayer *ffp, FFVoutTexture **texture, int new_width, int new_height, FFVoutPixelFormat format, int init_texture);
 void calculate_display_rect(SDL_Rect *rect, int scr_xleft, int scr_ytop, int scr_width, int scr_height, int pic_width, int pic_height, AVRational pic_sar);
-void get_sdl_pix_fmt_and_blendmode(int format, Uint32 *sdl_pix_fmt, SDL_BlendMode *sdl_blendmode);
-int upload_texture(FFPlayer *ffp, SDL_Texture **tex, AVFrame *frame, struct SwsContext **img_convert_ctx);
+int upload_texture(FFPlayer *ffp, FFVoutTexture **tex, AVFrame *frame, struct SwsContext **img_convert_ctx);
 void set_sdl_yuv_conversion_mode(AVFrame *frame);
 void video_image_display(FFPlayer *ffp, VideoState *is);
 void video_audio_display(FFPlayer *ffp, VideoState *s);

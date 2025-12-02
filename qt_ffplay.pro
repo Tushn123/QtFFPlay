@@ -6,6 +6,7 @@ SOURCES += \
     main.c \
     ffplay.c \
     ff_ffplayer.c \
+    ff_vout.c \
     ff_queue.c \
     ff_decoder.c \
     ff_clock.c \
@@ -18,6 +19,7 @@ HEADERS += \
     ff_queue.h \
     ff_decoder.h \
     ff_clock.h \
+    ff_vout.h \
     ffplay.h
 
 # ========== 输出目录配置 ==========
@@ -91,6 +93,7 @@ win32 {
                 -lswresample \
                 -lswscale \
                 -lSDL2 \
+                -lopengl32 \
                 -lws2_32 \
                 -lSecur32 \
                 -lBcrypt \
@@ -118,6 +121,7 @@ win32 {
                 $$PWD/lib/ffmpeg/swresample.lib \
                 $$PWD/lib/ffmpeg/swscale.lib    \
                 $$PWD/lib/SDL2/x64/SDL2.lib     \
+                opengl32.lib \
                 ws2_32.lib Secur32.lib Bcrypt.lib Strmiids.lib shell32.lib Ole32.lib
         
         # 使用 C11 标准编译 C 文件 (MSVC 2019 16.8+ 支持)

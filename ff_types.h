@@ -8,8 +8,9 @@
 
 #include "ff_define.h"
 
-/* Forward declaration */
+/* Forward declarations */
 struct FFPlayer;
+struct FFVoutTexture;
 
 typedef struct MyAVPacketList {
     AVPacket *pkt;      //解封装后的数据
@@ -177,10 +178,10 @@ typedef struct VideoState {
     FFTSample *rdft_data;
     int xpos;
     double last_vis_time;
-    SDL_Texture *vis_texture;
+    struct FFVoutTexture *vis_texture;   // 音频可视化纹理
 
-    SDL_Texture *sub_texture;           // 字幕纹理
-    SDL_Texture *vid_texture;           // 视频纹理
+    struct FFVoutTexture *sub_texture;  // 字幕纹理
+    struct FFVoutTexture *vid_texture;  // 视频纹理
 
     int subtitle_stream;                // 字幕流索引
     AVStream *subtitle_st;              // 字幕流

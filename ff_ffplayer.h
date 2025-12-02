@@ -113,11 +113,12 @@ typedef struct FFPlayer {
     /* 音频选项 */
     int startup_volume;
 
-    /* SDL 渲染相关 */
+    /* SDL 窗口和音频 */
     SDL_Window *window;
-    SDL_Renderer *renderer;
-    SDL_RendererInfo renderer_info;
     SDL_AudioDeviceID audio_dev;
+
+    /* 视频输出 (OpenGL) */
+    struct FFVout *vout;
 
     /* 运行时状态 */
     int is_full_screen;

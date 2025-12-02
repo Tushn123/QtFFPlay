@@ -20,6 +20,7 @@
  */
 
 #include "ff_ffplayer.h"
+#include "ff_vout.h"
 #include "ffplay.h"
 #include "cmdutils.h"
 
@@ -125,11 +126,12 @@ void ffp_set_defaults(FFPlayer *ffp)
     /* 音频选项 */
     ffp->startup_volume = 100;
 
-    /* SDL 渲染相关 */
+    /* SDL 窗口和音频 */
     ffp->window = NULL;
-    ffp->renderer = NULL;
-    memset(&ffp->renderer_info, 0, sizeof(ffp->renderer_info));
     ffp->audio_dev = 0;
+
+    /* 视频输出 */
+    ffp->vout = NULL;
 
     /* 运行时状态 */
     ffp->is_full_screen = 0;
@@ -258,7 +260,7 @@ int ffp_create_window(FFPlayer *ffp)
     if (ffp->display_disable)
         return 0;
 
-    int flags = SDL_WINDOW_HIDDEN;
+    int flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL;
     if (ffp->alwaysontop)
 #if SDL_VERSION_ATLEAST(2,0,5)
         flags |= SDL_WINDOW_ALWAYS_ON_TOP;
@@ -274,24 +276,20 @@ int ffp_create_window(FFPlayer *ffp)
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
 #endif
 
+    /* 创建支持 OpenGL 的窗口 */
     ffp->window = SDL_CreateWindow(program_name, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                    ffp->default_width, ffp->default_height, flags);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-
-    if (ffp->window) {
-        ffp->renderer = SDL_CreateRenderer(ffp->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!ffp->renderer) {
-            av_log(NULL, AV_LOG_WARNING, "Failed to initialize a hardware accelerated renderer: %s\n", SDL_GetError());
-            ffp->renderer = SDL_CreateRenderer(ffp->window, -1, 0);
-        }
-        if (ffp->renderer) {
-            if (!SDL_GetRendererInfo(ffp->renderer, &ffp->renderer_info))
-                av_log(NULL, AV_LOG_VERBOSE, "Initialized %s renderer.\n", ffp->renderer_info.name);
-        }
+    if (!ffp->window) {
+        av_log(NULL, AV_LOG_FATAL, "Failed to create window: %s\n", SDL_GetError());
+        return -1;
     }
 
-    if (!ffp->window || !ffp->renderer || !ffp->renderer_info.num_texture_formats) {
-        av_log(NULL, AV_LOG_FATAL, "Failed to create window or renderer: %s", SDL_GetError());
+    /* 创建视频输出上下文 (OpenGL) */
+    ffp->vout = vout_create(ffp->window);
+    if (!ffp->vout) {
+        av_log(NULL, AV_LOG_FATAL, "Failed to create video output context\n");
+        SDL_DestroyWindow(ffp->window);
+        ffp->window = NULL;
         return -1;
     }
 
@@ -308,12 +306,15 @@ void ffp_shutdown(FFPlayer *ffp)
         ffp->is = NULL;
     }
 
-    if (ffp->renderer)
-        SDL_DestroyRenderer(ffp->renderer);
+    /* 销毁视频输出上下文 */
+    if (ffp->vout) {
+        vout_destroy(ffp->vout);
+        ffp->vout = NULL;
+    }
+
     if (ffp->window)
         SDL_DestroyWindow(ffp->window);
 
-    ffp->renderer = NULL;
     ffp->window = NULL;
 
     uninit_opts();
