@@ -115,10 +115,16 @@ typedef struct FFPlayer {
 
     /* SDL 窗口和音频 */
     SDL_Window *window;
+    void *native_window;
     SDL_AudioDeviceID audio_dev;
 
     /* 视频输出 (OpenGL) */
     struct FFVout *vout;
+    
+    /* 渲染线程 */
+    SDL_Thread *render_tid;
+    int render_thread_running;
+    int auto_render_enabled;
 
     /* 运行时状态 */
     int is_full_screen;
@@ -195,6 +201,46 @@ int ffp_init_sdl(FFPlayer *ffp);
 int ffp_create_window(FFPlayer *ffp);
 
 /**
+ * 设置原生窗口句柄 (必须在 ffp_create_window 之前调用)
+ * @param handle 原生窗口句柄 (HWND / NSWindow* / Window)
+ * @return 0 成功，负数 失败
+ */
+int ffp_set_window_handle(FFPlayer *ffp, void *handle);
+
+/**
+ * 设置默认窗口大小 (必须在 ffp_create_window 之前调用)
+ * @param width 宽度
+ * @param height 高度
+ */
+void ffp_set_default_window_size(FFPlayer *ffp, int width, int height);
+
+/**
+ * 获取 SDL 窗口指针 (用于平台相关的嵌入操作)
+ * @return SDL_Window 指针
+ */
+SDL_Window *ffp_get_sdl_window(FFPlayer *ffp);
+
+/**
+ * 一键附加窗口并初始化 (简化 Qt 端调用)
+ * @param parent_handle 父窗口句柄
+ * @param width 窗口宽度
+ * @param height 窗口高度
+ * @return 0 成功，负数 失败
+ */
+int ffp_attach_window(FFPlayer *ffp, void *parent_handle, int width, int height);
+
+/**
+ * 启动自动渲染线程
+ * @return 0 成功，负数 失败
+ */
+int ffp_start_render_thread(FFPlayer *ffp);
+
+/**
+ * 停止自动渲染线程
+ */
+void ffp_stop_render_thread(FFPlayer *ffp);
+
+/**
  * 关闭播放器并清理资源
  */
 void ffp_shutdown(FFPlayer *ffp);
@@ -240,15 +286,14 @@ int ffp_seek_to(FFPlayer *ffp, long msec);
 
 /*
  * =============================================================================
- * 事件循环
+ * 渲染控制
  * =============================================================================
  */
 
 /**
- * 主事件循环
- * 处理用户输入、视频刷新等事件
+ * 渲染一帧 (由外部定时器调用)
  */
-void ffp_event_loop(FFPlayer *ffp);
+void ffp_render_frame(FFPlayer *ffp);
 
 /*
  * =============================================================================

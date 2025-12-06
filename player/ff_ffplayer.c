@@ -23,6 +23,12 @@
 #include "ff_vout.h"
 #include "ffplay.h"
 #include "cmdutils.h"
+#include "platform_embed.h"
+#include <SDL_syswm.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 /* 全局初始化状态 */
 static int g_ffp_global_init_done = 0;
@@ -128,10 +134,16 @@ void ffp_set_defaults(FFPlayer *ffp)
 
     /* SDL 窗口和音频 */
     ffp->window = NULL;
+    ffp->native_window = NULL;
     ffp->audio_dev = 0;
 
     /* 视频输出 */
     ffp->vout = NULL;
+    
+    /* 渲染线程 */
+    ffp->render_tid = NULL;
+    ffp->render_thread_running = 0;
+    ffp->auto_render_enabled = 1;
 
     /* 运行时状态 */
     ffp->is_full_screen = 0;
@@ -217,6 +229,29 @@ void ffp_destroy(FFPlayer *ffp)
  * =============================================================================
  */
 
+int ffp_set_window_handle(FFPlayer *ffp, void *handle)
+{
+    if (!ffp)
+        return -1;
+    
+    ffp->native_window = handle;
+    return 0;
+}
+
+void ffp_set_default_window_size(FFPlayer *ffp, int width, int height)
+{
+    if (!ffp)
+        return;
+    
+    ffp->default_width = width;
+    ffp->default_height = height;
+}
+
+SDL_Window *ffp_get_sdl_window(FFPlayer *ffp)
+{
+    return ffp ? ffp->window : NULL;
+}
+
 int ffp_init_sdl(FFPlayer *ffp)
 {
     int flags;
@@ -260,29 +295,46 @@ int ffp_create_window(FFPlayer *ffp)
     if (ffp->display_disable)
         return 0;
 
-    int flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL;
-    if (ffp->alwaysontop)
-#if SDL_VERSION_ATLEAST(2,0,5)
-        flags |= SDL_WINDOW_ALWAYS_ON_TOP;
-#else
-        av_log(NULL, AV_LOG_WARNING, "Your SDL version doesn't support SDL_WINDOW_ALWAYS_ON_TOP. Feature will be inactive.\n");
-#endif
-    if (ffp->borderless)
+    /* 通用代码：始终创建独立的 SDL OpenGL 窗口 */
+    int flags = SDL_WINDOW_OPENGL;
+    
+    if (ffp->native_window) {
+        /* 嵌入模式：创建无边框窗口，稍后由外部调用平台 API 嵌入 */
         flags |= SDL_WINDOW_BORDERLESS;
-    else
-        flags |= SDL_WINDOW_RESIZABLE;
+    } else {
+        /* 独立窗口模式 */
+        flags |= SDL_WINDOW_HIDDEN;
+        if (ffp->alwaysontop)
+#if SDL_VERSION_ATLEAST(2,0,5)
+            flags |= SDL_WINDOW_ALWAYS_ON_TOP;
+#else
+            av_log(NULL, AV_LOG_WARNING, "Your SDL version doesn't support SDL_WINDOW_ALWAYS_ON_TOP. Feature will be inactive.\n");
+#endif
+        if (ffp->borderless)
+            flags |= SDL_WINDOW_BORDERLESS;
+        else
+            flags |= SDL_WINDOW_RESIZABLE;
+    }
 
 #ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
 #endif
 
-    /* 创建支持 OpenGL 的窗口 */
-    ffp->window = SDL_CreateWindow(program_name, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                                   ffp->default_width, ffp->default_height, flags);
+    /* 创建支持 OpenGL 的 SDL 窗口 */
+    ffp->window = SDL_CreateWindow(
+        ffp->native_window ? "" : program_name,
+        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+        ffp->default_width, ffp->default_height, 
+        flags);
+    
     if (!ffp->window) {
-        av_log(NULL, AV_LOG_FATAL, "Failed to create window: %s\n", SDL_GetError());
+        av_log(NULL, AV_LOG_FATAL, "Failed to create SDL window: %s\n", SDL_GetError());
         return -1;
     }
+
+    av_log(NULL, AV_LOG_INFO, "SDL window created, mode: %s, size: %dx%d\n",
+           ffp->native_window ? "embedded" : "standalone",
+           ffp->default_width, ffp->default_height);
 
     /* 创建视频输出上下文 (OpenGL) */
     ffp->vout = vout_create(ffp->window);
@@ -298,8 +350,15 @@ int ffp_create_window(FFPlayer *ffp)
 
 void ffp_shutdown(FFPlayer *ffp)
 {
-    if (!ffp)
+    if (!ffp) {
+        av_log(NULL, AV_LOG_WARNING, "[SHUTDOWN] ffp_shutdown called with NULL\n");
         return;
+    }
+
+    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp_shutdown called\n");
+
+    /* 停止渲染线程 */
+    ffp_stop_render_thread(ffp);
 
     if (ffp->is) {
         stream_close(ffp, ffp->is);
@@ -330,16 +389,207 @@ void ffp_shutdown(FFPlayer *ffp)
 
 /*
  * =============================================================================
- * 事件循环
+ * 渲染控制
  * =============================================================================
  */
 
-void ffp_event_loop(FFPlayer *ffp)
+void ffp_render_frame(FFPlayer *ffp)
 {
-    if (!ffp || !ffp->is)
+    static int call_count = 0;
+    
+    if (!ffp || !ffp->is) {
+        if (call_count < 5) {
+            av_log(NULL, AV_LOG_WARNING, "[RENDER] ffp_render_frame skip: ffp=%p, is=%p\n",
+                   ffp, ffp ? ffp->is : NULL);
+        }
+        call_count++;
         return;
+    }
 
-    do_event_loop(ffp);
+    if (call_count < 10 || call_count % 60 == 0) {
+        av_log(NULL, AV_LOG_INFO, "[RENDER] ffp_render_frame call #%d, window=%p\n", call_count, ffp->window);
+    }
+
+    /* 检查窗口大小变化（自动同步）*/
+    if (ffp->window && ffp->native_window) {
+        SDL_SysWMinfo wmInfo;
+        SDL_VERSION(&wmInfo.version);
+        if (SDL_GetWindowWMInfo(ffp->window, &wmInfo)) {
+#ifdef _WIN32
+            HWND parent_hwnd = (HWND)ffp->native_window;
+            HWND sdl_hwnd = wmInfo.info.win.window;
+            
+            /* 获取父窗口客户区大小 */
+            RECT parent_rect;
+            GetClientRect(parent_hwnd, &parent_rect);
+            int parent_w = parent_rect.right - parent_rect.left;
+            int parent_h = parent_rect.bottom - parent_rect.top;
+            
+            /* 获取 SDL 窗口实际大小 */
+            RECT sdl_rect;
+            GetClientRect(sdl_hwnd, &sdl_rect);
+            int sdl_w = sdl_rect.right - sdl_rect.left;
+            int sdl_h = sdl_rect.bottom - sdl_rect.top;
+            
+            /* 父窗口大小变化或 SDL 窗口大小不匹配时，同步 */
+            if (parent_w > 0 && parent_h > 0 && 
+                (parent_w != sdl_w || parent_h != sdl_h ||
+                 parent_w != ffp->screen_width || parent_h != ffp->screen_height)) {
+                
+                /* 1. 更新 Windows 窗口位置和大小（强制填满父窗口） */
+                SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, parent_w, parent_h, 
+                            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                
+                /* 2. 通知 SDL 窗口大小变化 */
+                SDL_SetWindowSize(ffp->window, parent_w, parent_h);
+                
+                /* 3. 更新 OpenGL 视口 */
+                if (ffp->vout) {
+                    vout_set_size(ffp->vout, parent_w, parent_h);
+                }
+                
+                /* 4. 更新 VideoState 的宽高 */
+                if (ffp->is) {
+                    ffp->is->width = parent_w;
+                    ffp->is->height = parent_h;
+                    ffp->is->force_refresh = 1;
+                }
+                
+                ffp->screen_width = parent_w;
+                ffp->screen_height = parent_h;
+                av_log(NULL, AV_LOG_DEBUG, "Window synced to %dx%d\n", parent_w, parent_h);
+            }
+#else
+            /* 其他平台：简单检测 SDL 窗口大小 */
+            int w, h;
+            SDL_GetWindowSize(ffp->window, &w, &h);
+            if (w != ffp->screen_width || h != ffp->screen_height) {
+                ffp->screen_width = w;
+                ffp->screen_height = h;
+                if (ffp->vout) {
+                    vout_set_size(ffp->vout, w, h);
+                }
+            }
+#endif
+        }
+    }
+
+    double remaining_time = 0.0;
+    video_refresh(ffp, ffp->is, &remaining_time);
+    call_count++;
+}
+
+/* 渲染线程函数 */
+static int render_thread_func(void *arg)
+{
+    FFPlayer *ffp = (FFPlayer *)arg;
+    
+    av_log(NULL, AV_LOG_INFO, "[RENDER] Render thread started\n");
+    
+    int loop_count = 0;
+    while (ffp->render_thread_running) {
+        if (loop_count < 10 || loop_count % 60 == 0) {
+            av_log(NULL, AV_LOG_INFO, "[RENDER] Loop %d: running=%d, is=%p, abort=%d\n", 
+                   loop_count, ffp->render_thread_running, ffp->is, ffp->is ? ffp->is->abort_request : -1);
+        }
+        
+        if (ffp->is && !ffp->is->abort_request) {
+            if (loop_count < 10 || loop_count % 60 == 0) {
+                av_log(NULL, AV_LOG_INFO, "[RENDER] Loop %d: paused=%d, force_refresh=%d, show_mode=%d, width=%d\n",
+                       loop_count, ffp->is->paused, ffp->is->force_refresh, ffp->is->show_mode, ffp->is->width);
+            }
+            
+            /* 确保有刷新请求 */
+            if (!ffp->is->paused || ffp->is->force_refresh) {
+                ffp_render_frame(ffp);
+            } else {
+                /* 暂停时也需要显示最后一帧 */
+                ffp->is->force_refresh = 1;
+            }
+        } else {
+            if (loop_count < 10) {
+                av_log(NULL, AV_LOG_WARNING, "[RENDER] Loop %d: Skipping render, is=%p, abort=%d\n",
+                       loop_count, ffp->is, ffp->is ? ffp->is->abort_request : -1);
+            }
+        }
+        
+        loop_count++;
+        SDL_Delay(16); /* ~60fps */
+    }
+    
+    av_log(NULL, AV_LOG_INFO, "[RENDER] Render thread stopped (running=%d, loop_count=%d)\n", 
+           ffp->render_thread_running, loop_count);
+    return 0;
+}
+
+int ffp_start_render_thread(FFPlayer *ffp)
+{
+    if (!ffp)
+        return -1;
+    
+    if (ffp->render_tid) {
+        av_log(NULL, AV_LOG_WARNING, "Render thread already running\n");
+        return 0;
+    }
+    
+    ffp->render_thread_running = 1;
+    ffp->render_tid = SDL_CreateThread(render_thread_func, "render_thread", ffp);
+    
+    if (!ffp->render_tid) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create render thread: %s\n", SDL_GetError());
+        ffp->render_thread_running = 0;
+        return -1;
+    }
+    
+    return 0;
+}
+
+void ffp_stop_render_thread(FFPlayer *ffp)
+{
+    if (!ffp || !ffp->render_tid) {
+        av_log(NULL, AV_LOG_DEBUG, "[RENDER] ffp_stop_render_thread: nothing to stop\n");
+        return;
+    }
+
+    av_log(NULL, AV_LOG_INFO, "[RENDER] Stopping render thread...\n");
+    ffp->render_thread_running = 0;
+    SDL_WaitThread(ffp->render_tid, NULL);
+    ffp->render_tid = NULL;
+    av_log(NULL, AV_LOG_INFO, "[RENDER] Render thread stopped\n");
+}
+
+int ffp_attach_window(FFPlayer *ffp, void *parent_handle, int width, int height)
+{
+    if (!ffp || !parent_handle)
+        return -1;
+    
+    /* 1. 初始化 SDL */
+    if (ffp_init_sdl(ffp) < 0)
+        return -1;
+    
+    /* 2. 设置窗口参数 */
+    ffp_set_window_handle(ffp, parent_handle);
+    ffp_set_default_window_size(ffp, width, height);
+    
+    /* 3. 创建 SDL 窗口 */
+    if (ffp_create_window(ffp) < 0)
+        return -1;
+    
+    /* 4. 嵌入到父窗口 */
+    SDL_Window *sdl_win = ffp_get_sdl_window(ffp);
+    if (embed_sdl_window(sdl_win, parent_handle, width, height) < 0) {
+        av_log(NULL, AV_LOG_WARNING, "Window embedding failed, using standalone window\n");
+        /* 失败时显示独立窗口 */
+        SDL_ShowWindow(sdl_win);
+    }
+    
+    /* 5. 初始化窗口大小 (重要：确保后续 video_open 能正确工作) */
+    ffp->screen_width = width;
+    ffp->screen_height = height;
+    
+    /* 注意：渲染线程将在 ffp_prepare_async 中启动 */
+    av_log(NULL, AV_LOG_INFO, "Window attached successfully\n");
+    return 0;
 }
 
 /*
@@ -509,17 +759,33 @@ int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
     }
 
     ffp->prepared = 1;
+    
+    /* 注意：渲染线程将在视频流打开后（video_open）自动启动 */
     return 0;
 }
 
 int ffp_start(FFPlayer *ffp)
 {
-    if (!ffp || !ffp->is)
+    if (!ffp || !ffp->is) {
+        av_log(NULL, AV_LOG_ERROR, "[START] ffp_start failed: ffp=%p, is=%p\n", ffp, ffp ? ffp->is : NULL);
         return -1;
+    }
 
+    av_log(NULL, AV_LOG_INFO, "[START] ffp_start called: paused=%d, render_tid=%p, auto_render=%d\n",
+           ffp->is->paused, ffp->render_tid, ffp->auto_render_enabled);
+
+    /* 启动渲染线程（如果还未启动） */
+    if (ffp->auto_render_enabled && !ffp->render_tid) {
+        av_log(NULL, AV_LOG_INFO, "[START] Starting render thread from ffp_start\n");
+        ffp_start_render_thread(ffp);
+    }
+
+    /* 如果处于暂停状态，恢复播放 */
     if (ffp->is->paused) {
+        av_log(NULL, AV_LOG_INFO, "[START] Unpausing playback\n");
         toggle_pause(ffp->is);
     }
+    
     return 0;
 }
 

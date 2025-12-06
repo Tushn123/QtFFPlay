@@ -1,26 +1,31 @@
 TEMPLATE = app
 CONFIG += c++11
 CONFIG += console
+QT += core gui widgets
 
 SOURCES += \
-    main.c \
-    ffplay.c \
-    ff_ffplayer.c \
-    ff_vout.c \
-    ff_queue.c \
-    ff_decoder.c \
-    ff_clock.c \
-    cmdutils.c \
-    opt_common.c
+    main.cpp \
+    PlayerWidget.cpp \
+    platform_embed.c \
+    player/ffplay.c \
+    player/ff_ffplayer.c \
+    player/ff_vout.c \
+    player/ff_queue.c \
+    player/ff_decoder.c \
+    player/ff_clock.c \
+    player/cmdutils.c \
+    player/opt_common.c
 
 HEADERS += \
-    ff_define.h \
-    ff_types.h \
-    ff_queue.h \
-    ff_decoder.h \
-    ff_clock.h \
-    ff_vout.h \
-    ffplay.h
+    PlayerWidget.h \
+    platform_embed.h \
+    player/ff_define.h \
+    player/ff_types.h \
+    player/ff_queue.h \
+    player/ff_decoder.h \
+    player/ff_clock.h \
+    player/ff_vout.h \
+    player/ffplay.h
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/
@@ -122,6 +127,7 @@ win32 {
                 $$PWD/lib/ffmpeg/swscale.lib    \
                 $$PWD/lib/SDL2/x64/SDL2.lib     \
                 opengl32.lib \
+                user32.lib \
                 ws2_32.lib Secur32.lib Bcrypt.lib Strmiids.lib shell32.lib Ole32.lib
         
         # 使用 C11 标准编译 C 文件 (MSVC 2019 16.8+ 支持)

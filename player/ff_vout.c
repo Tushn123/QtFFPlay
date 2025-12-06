@@ -27,8 +27,8 @@
 /* 跨平台 OpenGL 头文件 */
 #ifdef _WIN32
     #include <windows.h>
-    #include <GL/gl.h>
-    #include <GL/glext.h>
+    /* #include <GL/gl.h> */
+    /* #include <GL/glext.h> */
 #elif defined(__APPLE__)
     #define GL_SILENCE_DEPRECATION
     #include <OpenGL/gl3.h>
@@ -362,7 +362,12 @@ FFVout *vout_create(SDL_Window *window)
     vout->draw_color[3] = 1.0f;
     
     /* 默认缩放模式：保持宽高比 */
-    vout->scale_mode = VOUT_SCALE_ASPECT_FILL;
+    vout->scale_mode = VOUT_SCALE_STRETCH;
+    
+    /* 关键：释放 OpenGL 上下文，让渲染线程可以获取它 */
+    /* OpenGL 上下文一次只能被一个线程持有 */
+    SDL_GL_MakeCurrent(window, NULL);
+    SDL_Log("[VOUT] OpenGL context created and released for render thread");
     
     return vout;
 }
@@ -613,10 +618,21 @@ void vout_texture_get_size(FFVoutTexture *texture, int *width, int *height)
 
 void vout_render_begin(FFVout *vout)
 {
+    static int begin_count = 0;
+    
     if (!vout)
         return;
     
-    SDL_GL_MakeCurrent(vout->window, vout->gl_ctx);
+    int result = SDL_GL_MakeCurrent(vout->window, vout->gl_ctx);
+    if (result != 0 && begin_count < 5) {
+        SDL_Log("[RENDER_BEGIN] SDL_GL_MakeCurrent failed: %s", SDL_GetError());
+    }
+    
+    if (begin_count < 3) {
+        SDL_Log("[RENDER_BEGIN] #%d: window=%p, gl_ctx=%p, result=%d",
+                begin_count, vout->window, vout->gl_ctx, result);
+    }
+    begin_count++;
 }
 
 void vout_clear(FFVout *vout, uint8_t r, uint8_t g, uint8_t b)
@@ -805,6 +821,16 @@ void vout_draw_texture(FFVout *vout, FFVoutTexture *texture,
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
     
+    static int draw_tex_count = 0;
+    if (draw_tex_count < 5) {
+        GLenum err = glGetError();
+        SDL_Log("[DRAW_TEX] #%d: vao=%u, program=%u, tex0=%u, err=0x%X", 
+                draw_tex_count, vout->vao, 
+                texture->format == VOUT_FMT_YUV420P ? vout->program_yuv : vout->program_rgba,
+                texture->tex_id[0], err);
+    }
+    draw_tex_count++;
+    
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
@@ -823,9 +849,24 @@ void vout_draw_texture_blend(FFVout *vout, FFVoutTexture *texture,
 
 void vout_render_present(FFVout *vout)
 {
-    if (!vout)
+    static int present_count = 0;
+    
+    if (!vout) {
+        SDL_Log("[PRESENT] vout is NULL");
         return;
+    }
+    
+    // 检查 OpenGL 错误
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR && present_count < 10) {
+        SDL_Log("[PRESENT] OpenGL error before swap: 0x%X", err);
+    }
+    
+    if (present_count < 10 || present_count % 60 == 0) {
+        SDL_Log("[PRESENT] #%d: Swapping window=%p", present_count, vout->window);
+    }
     
     SDL_GL_SwapWindow(vout->window);
+    present_count++;
 }
 

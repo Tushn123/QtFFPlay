@@ -168,12 +168,19 @@ void set_sdl_yuv_conversion_mode(AVFrame *frame)
 
 void video_image_display(FFPlayer *ffp, VideoState *is)
 {
+    static int image_count = 0;
     Frame *vp;
     Frame *sp = NULL;
     SDL_Rect rect;
     FFVoutRect dst_rect;
 
     vp = frame_queue_peek_last(&is->pictq);
+    
+    if (image_count < 10 || image_count % 60 == 0) {
+        av_log(NULL, AV_LOG_INFO, "[IMAGE] #%d: vp=%p, uploaded=%d, width=%d, height=%d\n",
+               image_count, vp, vp ? vp->uploaded : -1, vp ? vp->width : 0, vp ? vp->height : 0);
+    }
+    image_count++;
     
     /* 处理字幕 */
     if (is->subtitle_st) {
@@ -226,11 +233,17 @@ void video_image_display(FFPlayer *ffp, VideoState *is)
     calculate_display_rect(&rect, is->xleft, is->ytop, is->width, is->height, vp->width, vp->height, vp->sar);
 
     if (!vp->uploaded) {
+        static int upload_count = 0;
         if (upload_texture(ffp, &is->vid_texture, vp->frame, &is->img_convert_ctx) < 0) {
+            av_log(NULL, AV_LOG_ERROR, "[IMAGE] upload_texture failed (count=%d)\n", upload_count);
             return;
         }
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
+        if (upload_count < 10) {
+            av_log(NULL, AV_LOG_INFO, "[IMAGE] Texture uploaded #%d\n", upload_count);
+        }
+        upload_count++;
     }
 
     /* 转换 SDL_Rect 到 FFVoutRect */
@@ -240,7 +253,14 @@ void video_image_display(FFPlayer *ffp, VideoState *is)
     dst_rect.h = rect.h;
 
     /* 绘制视频纹理 */
+    static int draw_count = 0;
     vout_draw_texture(ffp->vout, is->vid_texture, NULL, &dst_rect, vp->flip_v);
+    
+    if (draw_count < 10 || draw_count % 60 == 0) {
+        av_log(NULL, AV_LOG_INFO, "[IMAGE] Draw texture #%d: rect=(%d,%d,%d,%d)\n",
+               draw_count, dst_rect.x, dst_rect.y, dst_rect.w, dst_rect.h);
+    }
+    draw_count++;
     
     /* 绘制字幕 */
     if (sp) {
@@ -509,21 +529,41 @@ int video_open(FFPlayer *ffp, VideoState *is)
     w = ffp->screen_width ? ffp->screen_width : ffp->default_width;
     h = ffp->screen_height ? ffp->screen_height : ffp->default_height;
 
-    if (!ffp->window_title)
-        ffp->window_title = ffp->input_filename;
-    SDL_SetWindowTitle(ffp->window, ffp->window_title);
+    av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Called: native_window=%p, window=%p, size=%dx%d\n",
+           ffp->native_window, ffp->window, w, h);
 
-    SDL_SetWindowSize(ffp->window, w, h);
-    SDL_SetWindowPosition(ffp->window, ffp->screen_left, ffp->screen_top);
-    if (ffp->is_full_screen)
-        SDL_SetWindowFullscreen(ffp->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-    SDL_ShowWindow(ffp->window);
+    /* 对于从原生窗口创建的 SDL 窗口，不要修改窗口属性 */
+    if (!ffp->native_window) {
+        if (!ffp->window_title)
+            ffp->window_title = ffp->input_filename;
+        SDL_SetWindowTitle(ffp->window, ffp->window_title);
+
+        SDL_SetWindowSize(ffp->window, w, h);
+        SDL_SetWindowPosition(ffp->window, ffp->screen_left, ffp->screen_top);
+        if (ffp->is_full_screen)
+            SDL_SetWindowFullscreen(ffp->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        SDL_ShowWindow(ffp->window);
+    } else {
+        /* 对于嵌入式窗口，使用实际窗口大小 */
+        SDL_GetWindowSize(ffp->window, &w, &h);
+    }
 
     /* 更新 OpenGL 视口大小 */
     vout_set_size(ffp->vout, w, h);
 
     is->width  = w;
     is->height = h;
+    
+    av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Set is->width=%d, is->height=%d, vout=%p\n", w, h, ffp->vout);
+    
+    /* 确保渲染线程已启动（视频流打开后启动） */
+    if (ffp->auto_render_enabled && !ffp->render_tid) {
+        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Auto-starting render thread\n");
+        ffp_start_render_thread(ffp);
+    } else {
+        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Render thread: auto_render=%d, render_tid=%p\n",
+               ffp->auto_render_enabled, ffp->render_tid);
+    }
 
     return 0;
 }
@@ -531,16 +571,27 @@ int video_open(FFPlayer *ffp, VideoState *is)
 /* display the current picture, if any */
 void video_display(FFPlayer *ffp, VideoState *is)
 {
-    if (!is->width)
+    static int display_count = 0;
+    
+    if (!is->width) {
+        av_log(NULL, AV_LOG_INFO, "[DISPLAY] Calling video_open, is->width=0\n");
         video_open(ffp, is);
+    }
+
+    if (display_count < 10 || display_count % 60 == 0) {
+        av_log(NULL, AV_LOG_INFO, "[DISPLAY] #%d: width=%d, show_mode=%d, video_st=%p, audio_st=%p\n",
+               display_count, is->width, is->show_mode, is->video_st, is->audio_st);
+    }
 
     vout_render_begin(ffp->vout);
     vout_clear(ffp->vout, 0, 0, 0);
     if (is->audio_st && is->show_mode != SHOW_MODE_VIDEO)
         video_audio_display(ffp, is);
-    else if (is->video_st)
+    else if (is->video_st) {
         video_image_display(ffp, is);
+    }
     vout_render_present(ffp->vout);
+    display_count++;
 }
 
 /* seek in the stream */
@@ -600,12 +651,20 @@ void step_to_next_frame(VideoState *is)
 /* called to display each frame */
 void video_refresh(FFPlayer *ffp, VideoState *is, double *remaining_time)
 {
+    static int refresh_count = 0;
     double time;
 
     Frame *sp, *sp2;
+    
+    if (refresh_count < 10 || refresh_count % 60 == 0) {
+        av_log(NULL, AV_LOG_INFO, "[REFRESH] #%d: paused=%d, force_refresh=%d, show_mode=%d, video_st=%p\n",
+               refresh_count, is->paused, is->force_refresh, is->show_mode, is->video_st);
+    }
 
     if (!is->paused && get_master_sync_type(is) == AV_SYNC_EXTERNAL_CLOCK && is->realtime)
         check_external_clock_speed(is);
+    
+    refresh_count++;
 
     if (!ffp->display_disable && is->show_mode != SHOW_MODE_VIDEO && is->audio_st) {
         time = av_gettime_relative() / 1000000.0;
@@ -620,6 +679,11 @@ void video_refresh(FFPlayer *ffp, VideoState *is, double *remaining_time)
 retry:
         if (frame_queue_nb_remaining(&is->pictq) == 0) {
             // nothing to do, no picture to display in the queue
+            static int empty_count = 0;
+            if (empty_count < 10 || empty_count % 60 == 0) {
+                av_log(NULL, AV_LOG_INFO, "[REFRESH] pictq empty (count=%d)\n", empty_count);
+            }
+            empty_count++;
         } else {
             double last_duration, duration, delay;
             Frame *vp, *lastvp;
@@ -707,8 +771,16 @@ retry:
                 stream_toggle_pause(is);
         }
 display:
-        if (!ffp->display_disable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown)
+        if (!ffp->display_disable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown) {
             video_display(ffp, is);
+        } else {
+            static int skip_count = 0;
+            if (skip_count < 10 || skip_count % 60 == 0) {
+                av_log(NULL, AV_LOG_INFO, "[REFRESH] Skip display: disable=%d, force=%d, mode=%d, rindex_shown=%d\n",
+                       ffp->display_disable, is->force_refresh, is->show_mode, is->pictq.rindex_shown);
+            }
+            skip_count++;
+        }
     }
     is->force_refresh = 0;
     if (ffp->show_status) {
