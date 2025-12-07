@@ -6,7 +6,6 @@ QT += core gui widgets
 SOURCES += \
     main.cpp \
     PlayerWidget.cpp \
-    player/platform_embed.c \
     player/ffplay.c \
     player/ff_ffplayer.c \
     player/ff_vout.c \
@@ -18,7 +17,6 @@ SOURCES += \
 
 HEADERS += \
     PlayerWidget.h \
-    player/platform_embed.h \
     player/ff_define.h \
     player/ff_types.h \
     player/ff_queue.h \

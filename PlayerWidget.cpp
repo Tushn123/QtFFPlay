@@ -7,6 +7,7 @@
 #include "PlayerWidget.h"
 #include <QKeyEvent>
 #include <QDebug>
+#include <QPainter>
 
 // 避免 C 头文件中的 class 关键字冲突
 #define class class_name
@@ -20,9 +21,8 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_ffp(nullptr)
     , m_initialized(false)
 {
-    // 确保 widget 有原生窗口句柄（子窗口需要一个父窗口句柄）
+    // 确保 widget 有原生窗口句柄
     setAttribute(Qt::WA_NativeWindow);
-    setAttribute(Qt::WA_DontCreateNativeAncestors);
     
     // 设置焦点策略以接收键盘事件
     setFocusPolicy(Qt::StrongFocus);

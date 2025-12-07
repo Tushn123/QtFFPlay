@@ -23,7 +23,6 @@
 #include "ff_vout.h"
 #include "ffplay.h"
 #include "cmdutils.h"
-#include "platform_embed.h"
 #include <SDL_syswm.h>
 
 #ifdef _WIN32
@@ -125,7 +124,7 @@ void ffp_set_defaults(FFPlayer *ffp)
     ffp->screen_width = 0;
     ffp->screen_height = 0;
     ffp->display_disable = 0;
-    ffp->show_mode = SHOW_MODE_NONE;
+    ffp->show_mode = -1;  /* SHOW_MODE_NONE */
     ffp->rdftspeed = 0.02;
     ffp->show_status = -1;
 
@@ -295,37 +294,57 @@ int ffp_create_window(FFPlayer *ffp)
     if (ffp->display_disable)
         return 0;
 
-    /* 通用代码：始终创建独立的 SDL OpenGL 窗口 */
-    int flags = SDL_WINDOW_OPENGL;
-    
+#ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+#endif
+
+    /* 必须在创建窗口前设置 OpenGL 属性！*/
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+
     if (ffp->native_window) {
-        /* 嵌入模式：创建无边框窗口，稍后由外部调用平台 API 嵌入 */
-        flags |= SDL_WINDOW_BORDERLESS;
+        /*
+         * 外部窗口模式：使用 SDL_CreateWindowFrom
+         * 直接在外部窗口上创建 OpenGL 上下文，无需子窗口
+         */
+        ffp->window = SDL_CreateWindowFrom(ffp->native_window);
+        if (ffp->window) {
+            av_log(NULL, AV_LOG_INFO, "SDL_CreateWindowFrom succeeded, using external window\n");
+            ffp->use_external_window = 1;
+        } else {
+            av_log(NULL, AV_LOG_WARNING, "SDL_CreateWindowFrom failed: %s, falling back to child window\n", 
+                   SDL_GetError());
+            ffp->use_external_window = 0;
+            
+            /* 回退：创建独立窗口（稍后需要嵌入为子窗口）*/
+            int flags = SDL_WINDOW_OPENGL | SDL_WINDOW_BORDERLESS;
+            ffp->window = SDL_CreateWindow("", 
+                SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                ffp->default_width, ffp->default_height, flags);
+        }
     } else {
         /* 独立窗口模式 */
-        flags |= SDL_WINDOW_HIDDEN;
+        int flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
         if (ffp->alwaysontop)
 #if SDL_VERSION_ATLEAST(2,0,5)
             flags |= SDL_WINDOW_ALWAYS_ON_TOP;
 #else
-            av_log(NULL, AV_LOG_WARNING, "Your SDL version doesn't support SDL_WINDOW_ALWAYS_ON_TOP. Feature will be inactive.\n");
+            av_log(NULL, AV_LOG_WARNING, "Your SDL version doesn't support SDL_WINDOW_ALWAYS_ON_TOP.\n");
 #endif
         if (ffp->borderless)
             flags |= SDL_WINDOW_BORDERLESS;
         else
             flags |= SDL_WINDOW_RESIZABLE;
+
+        ffp->window = SDL_CreateWindow(program_name,
+            SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+            ffp->default_width, ffp->default_height, flags);
+        ffp->use_external_window = 0;
     }
-
-#ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
-    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
-#endif
-
-    /* 创建支持 OpenGL 的 SDL 窗口 */
-    ffp->window = SDL_CreateWindow(
-        ffp->native_window ? "" : program_name,
-        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-        ffp->default_width, ffp->default_height, 
-        flags);
     
     if (!ffp->window) {
         av_log(NULL, AV_LOG_FATAL, "Failed to create SDL window: %s\n", SDL_GetError());
@@ -333,15 +352,38 @@ int ffp_create_window(FFPlayer *ffp)
     }
 
     av_log(NULL, AV_LOG_INFO, "SDL window created, mode: %s, size: %dx%d\n",
-           ffp->native_window ? "embedded" : "standalone",
+           ffp->use_external_window ? "external" : (ffp->native_window ? "child" : "standalone"),
            ffp->default_width, ffp->default_height);
 
     /* 创建视频输出上下文 (OpenGL) */
     ffp->vout = vout_create(ffp->window);
-    if (!ffp->vout) {
-        av_log(NULL, AV_LOG_FATAL, "Failed to create video output context\n");
+    
+    /* 如果外部窗口模式下 OpenGL 创建失败，回退到子窗口方案 */
+    if (!ffp->vout && ffp->use_external_window && ffp->native_window) {
+        av_log(NULL, AV_LOG_WARNING, "OpenGL context failed on external window, falling back to child window\n");
         SDL_DestroyWindow(ffp->window);
         ffp->window = NULL;
+        ffp->use_external_window = 0;
+        
+        /* 创建独立窗口（稍后嵌入为子窗口）*/
+        int flags = SDL_WINDOW_OPENGL | SDL_WINDOW_BORDERLESS;
+        ffp->window = SDL_CreateWindow("", 
+            SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+            ffp->default_width, ffp->default_height, flags);
+        
+        if (ffp->window) {
+            av_log(NULL, AV_LOG_INFO, "Fallback: created child window %dx%d\n",
+                   ffp->default_width, ffp->default_height);
+            ffp->vout = vout_create(ffp->window);
+        }
+    }
+    
+    if (!ffp->vout) {
+        av_log(NULL, AV_LOG_FATAL, "Failed to create video output context\n");
+        if (ffp->window) {
+            SDL_DestroyWindow(ffp->window);
+            ffp->window = NULL;
+        }
         return -1;
     }
 
@@ -411,67 +453,82 @@ double ffp_render_frame(FFPlayer *ffp)
         av_log(NULL, AV_LOG_INFO, "[RENDER] ffp_render_frame call #%d, window=%p\n", call_count, ffp->window);
     }
 
-    /* 检查窗口大小变化（自动同步）*/
-    if (ffp->window && ffp->native_window) {
-        SDL_SysWMinfo wmInfo;
-        SDL_VERSION(&wmInfo.version);
-        if (SDL_GetWindowWMInfo(ffp->window, &wmInfo)) {
-#ifdef _WIN32
-            HWND parent_hwnd = (HWND)ffp->native_window;
-            HWND sdl_hwnd = wmInfo.info.win.window;
-            
-            /* 获取父窗口客户区大小 */
-            RECT parent_rect;
-            GetClientRect(parent_hwnd, &parent_rect);
-            int parent_w = parent_rect.right - parent_rect.left;
-            int parent_h = parent_rect.bottom - parent_rect.top;
-            
-            /* 获取 SDL 窗口实际大小 */
-            RECT sdl_rect;
-            GetClientRect(sdl_hwnd, &sdl_rect);
-            int sdl_w = sdl_rect.right - sdl_rect.left;
-            int sdl_h = sdl_rect.bottom - sdl_rect.top;
-            
-            /* 父窗口大小变化或 SDL 窗口大小不匹配时，同步 */
-            if (parent_w > 0 && parent_h > 0 && 
-                (parent_w != sdl_w || parent_h != sdl_h ||
-                 parent_w != ffp->screen_width || parent_h != ffp->screen_height)) {
+    /* 检查窗口大小变化 */
+    if (ffp->window) {
+        int new_w, new_h;
+        SDL_GetWindowSize(ffp->window, &new_w, &new_h);
+        
+        if (ffp->use_external_window) {
+            /*
+             * 外部窗口模式 (SDL_CreateWindowFrom)
+             * SDL 窗口就是外部窗口，大小自动同步，只需更新 OpenGL viewport
+             */
+            if (new_w > 0 && new_h > 0 &&
+                (new_w != ffp->screen_width || new_h != ffp->screen_height)) {
                 
-                /* 1. 更新 Windows 窗口位置和大小（强制填满父窗口） */
-                SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, parent_w, parent_h, 
-                            SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                
-                /* 2. 通知 SDL 窗口大小变化 */
-                SDL_SetWindowSize(ffp->window, parent_w, parent_h);
-                
-                /* 3. 更新 OpenGL 视口 */
+                /* 更新 OpenGL 视口 */
                 if (ffp->vout) {
-                    vout_set_size(ffp->vout, parent_w, parent_h);
+                    vout_set_size(ffp->vout, new_w, new_h);
                 }
                 
-                /* 4. 更新 VideoState 的宽高 */
+                /* 更新 VideoState */
                 if (ffp->is) {
-                    ffp->is->width = parent_w;
-                    ffp->is->height = parent_h;
+                    ffp->is->width = new_w;
+                    ffp->is->height = new_h;
                     ffp->is->force_refresh = 1;
                 }
                 
-                ffp->screen_width = parent_w;
-                ffp->screen_height = parent_h;
-                av_log(NULL, AV_LOG_DEBUG, "Window synced to %dx%d\n", parent_w, parent_h);
+                ffp->screen_width = new_w;
+                ffp->screen_height = new_h;
+                av_log(NULL, AV_LOG_DEBUG, "External window resized to %dx%d\n", new_w, new_h);
             }
-#else
-            /* 其他平台：简单检测 SDL 窗口大小 */
-            int w, h;
-            SDL_GetWindowSize(ffp->window, &w, &h);
-            if (w != ffp->screen_width || h != ffp->screen_height) {
-                ffp->screen_width = w;
-                ffp->screen_height = h;
-                if (ffp->vout) {
-                    vout_set_size(ffp->vout, w, h);
+        } else if (ffp->native_window) {
+            /*
+             * 子窗口模式 (回退方案)
+             * 需要手动同步子窗口位置和大小
+             */
+#ifdef _WIN32
+            SDL_SysWMinfo wmInfo;
+            SDL_VERSION(&wmInfo.version);
+            if (SDL_GetWindowWMInfo(ffp->window, &wmInfo)) {
+                HWND parent_hwnd = (HWND)ffp->native_window;
+                HWND sdl_hwnd = wmInfo.info.win.window;
+                
+                RECT parent_rect;
+                GetClientRect(parent_hwnd, &parent_rect);
+                int parent_w = parent_rect.right - parent_rect.left;
+                int parent_h = parent_rect.bottom - parent_rect.top;
+                
+                if (parent_w > 0 && parent_h > 0 &&
+                    (parent_w != ffp->screen_width || parent_h != ffp->screen_height)) {
+                    
+                    SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, parent_w, parent_h,
+                                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    SDL_SetWindowSize(ffp->window, parent_w, parent_h);
+                    
+                    if (ffp->vout) {
+                        vout_set_size(ffp->vout, parent_w, parent_h);
+                    }
+                    if (ffp->is) {
+                        ffp->is->width = parent_w;
+                        ffp->is->height = parent_h;
+                        ffp->is->force_refresh = 1;
+                    }
+                    
+                    ffp->screen_width = parent_w;
+                    ffp->screen_height = parent_h;
                 }
             }
 #endif
+        } else {
+            /* 独立窗口模式 */
+            if (new_w != ffp->screen_width || new_h != ffp->screen_height) {
+                if (ffp->vout) {
+                    vout_set_size(ffp->vout, new_w, new_h);
+                }
+                ffp->screen_width = new_w;
+                ffp->screen_height = new_h;
+            }
         }
     }
 
@@ -588,24 +645,46 @@ int ffp_attach_window(FFPlayer *ffp, void *parent_handle, int width, int height)
     ffp_set_window_handle(ffp, parent_handle);
     ffp_set_default_window_size(ffp, width, height);
     
-    /* 3. 创建 SDL 窗口 */
+    /* 3. 创建 SDL 窗口 (优先使用 SDL_CreateWindowFrom) */
     if (ffp_create_window(ffp) < 0)
         return -1;
     
-    /* 4. 嵌入到父窗口 */
-    SDL_Window *sdl_win = ffp_get_sdl_window(ffp);
-    if (embed_sdl_window(sdl_win, parent_handle, width, height) < 0) {
-        av_log(NULL, AV_LOG_WARNING, "Window embedding failed, using standalone window\n");
-        /* 失败时显示独立窗口 */
+    /* 4. 根据窗口创建方式处理 */
+    if (ffp->use_external_window) {
+        /* SDL_CreateWindowFrom 成功，无需额外操作 */
+        av_log(NULL, AV_LOG_INFO, "Using external window directly (no embedding needed)\n");
+    } else {
+        /* 回退方案：需要嵌入子窗口 */
+        SDL_Window *sdl_win = ffp_get_sdl_window(ffp);
+#ifdef _WIN32
+        SDL_SysWMinfo wmInfo;
+        SDL_VERSION(&wmInfo.version);
+        if (SDL_GetWindowWMInfo(sdl_win, &wmInfo)) {
+            HWND sdl_hwnd = wmInfo.info.win.window;
+            HWND parent_hwnd = (HWND)parent_handle;
+            
+            SetParent(sdl_hwnd, parent_hwnd);
+            
+            LONG_PTR style = GetWindowLongPtr(sdl_hwnd, GWL_STYLE);
+            style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
+            style |= (WS_CHILD | WS_VISIBLE);
+            SetWindowLongPtr(sdl_hwnd, GWL_STYLE, style);
+            
+            SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, width, height, 
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            
+            av_log(NULL, AV_LOG_INFO, "Child window embedded (fallback)\n");
+        }
+#endif
         SDL_ShowWindow(sdl_win);
     }
     
-    /* 5. 初始化窗口大小 (重要：确保后续 video_open 能正确工作) */
+    /* 5. 初始化窗口大小 */
     ffp->screen_width = width;
     ffp->screen_height = height;
     
-    /* 注意：渲染线程将在 ffp_prepare_async 中启动 */
-    av_log(NULL, AV_LOG_INFO, "Window attached successfully\n");
+    av_log(NULL, AV_LOG_INFO, "Window attached successfully, mode: %s\n",
+           ffp->use_external_window ? "external" : "child");
     return 0;
 }
 

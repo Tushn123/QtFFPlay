@@ -116,6 +116,7 @@ typedef struct FFPlayer {
     /* SDL 窗口和音频 */
     SDL_Window *window;
     void *native_window;
+    int use_external_window;    /* 1: SDL_CreateWindowFrom 成功，直接使用外部窗口 */
     SDL_AudioDeviceID audio_dev;
 
     /* 视频输出 (OpenGL) */
