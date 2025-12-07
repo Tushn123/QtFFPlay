@@ -393,9 +393,10 @@ void ffp_shutdown(FFPlayer *ffp)
  * =============================================================================
  */
 
-void ffp_render_frame(FFPlayer *ffp)
+double ffp_render_frame(FFPlayer *ffp)
 {
     static int call_count = 0;
+    double remaining_time = REFRESH_RATE;  /* 默认刷新间隔 */
     
     if (!ffp || !ffp->is) {
         if (call_count < 5) {
@@ -403,7 +404,7 @@ void ffp_render_frame(FFPlayer *ffp)
                    ffp, ffp ? ffp->is : NULL);
         }
         call_count++;
-        return;
+        return remaining_time;
     }
 
     if (call_count < 10 || call_count % 60 == 0) {
@@ -474,9 +475,11 @@ void ffp_render_frame(FFPlayer *ffp)
         }
     }
 
-    double remaining_time = 0.0;
+    remaining_time = 0.0;
     video_refresh(ffp, ffp->is, &remaining_time);
     call_count++;
+    
+    return remaining_time;
 }
 
 /* 渲染线程函数 */
@@ -487,6 +490,8 @@ static int render_thread_func(void *arg)
     av_log(NULL, AV_LOG_INFO, "[RENDER] Render thread started\n");
     
     int loop_count = 0;
+    double remaining_time = 0.0;
+    
     while (ffp->render_thread_running) {
         if (loop_count < 10 || loop_count % 60 == 0) {
             av_log(NULL, AV_LOG_INFO, "[RENDER] Loop %d: running=%d, is=%p, abort=%d\n", 
@@ -501,20 +506,32 @@ static int render_thread_func(void *arg)
             
             /* 确保有刷新请求 */
             if (!ffp->is->paused || ffp->is->force_refresh) {
-                ffp_render_frame(ffp);
+                remaining_time = ffp_render_frame(ffp);
             } else {
                 /* 暂停时也需要显示最后一帧 */
                 ffp->is->force_refresh = 1;
+                remaining_time = REFRESH_RATE;
             }
         } else {
             if (loop_count < 10) {
                 av_log(NULL, AV_LOG_WARNING, "[RENDER] Loop %d: Skipping render, is=%p, abort=%d\n",
                        loop_count, ffp->is, ffp->is ? ffp->is->abort_request : -1);
             }
+            remaining_time = REFRESH_RATE;
         }
         
         loop_count++;
-        SDL_Delay(16); /* ~60fps */
+        
+        /* 根据 remaining_time 动态休眠，实现精确帧率控制 */
+        if (remaining_time > 0.0) {
+            int delay_ms = (int)(remaining_time * 1000.0);
+            /* 限制最小/最大延迟，避免极端值 */
+            if (delay_ms < 1) delay_ms = 1;
+            if (delay_ms > 100) delay_ms = 100;  /* 最大 100ms，保证响应性 */
+            SDL_Delay(delay_ms);
+        } else {
+            SDL_Delay(1);  /* 最小延迟，避免 CPU 100% */
+        }
     }
     
     av_log(NULL, AV_LOG_INFO, "[RENDER] Render thread stopped (running=%d, loop_count=%d)\n", 

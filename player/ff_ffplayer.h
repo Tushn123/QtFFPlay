@@ -291,9 +291,10 @@ int ffp_seek_to(FFPlayer *ffp, long msec);
  */
 
 /**
- * 渲染一帧 (由外部定时器调用)
+ * 渲染一帧 (由渲染线程调用)
+ * @return 下一帧的等待时间（秒），用于精确帧率控制
  */
-void ffp_render_frame(FFPlayer *ffp);
+double ffp_render_frame(FFPlayer *ffp);
 
 /*
  * =============================================================================
