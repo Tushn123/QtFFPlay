@@ -13,7 +13,8 @@ SOURCES += \
     player/ff_decoder.c \
     player/ff_clock.c \
     player/cmdutils.c \
-    player/opt_common.c
+    player/opt_common.c \
+    player/mediaplayer.c
 
 HEADERS += \
     PlayerWidget.h \
@@ -23,7 +24,11 @@ HEADERS += \
     player/ff_decoder.h \
     player/ff_clock.h \
     player/ff_vout.h \
-    player/ffplay.h
+    player/ffplay.h \
+    player/ff_ffplayer.h \
+    player/ff_ffmsg.h \
+    player/ff_ffmsg_queue.h \
+    player/mediaplayer.h
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/
