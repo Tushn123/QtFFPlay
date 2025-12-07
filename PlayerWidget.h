@@ -80,6 +80,9 @@ private:
     std::thread m_msgThread;
     std::atomic<bool> m_msgLoopRunning;
     int m_lastState;
+    
+    // 播放标志：如果在准备阶段调用 play()，准备完成后自动播放
+    bool m_startOnPrepared;
 };
 
 #endif // PLAYERWIDGET_H

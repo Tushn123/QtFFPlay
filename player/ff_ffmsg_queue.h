@@ -277,7 +277,8 @@ inline static void msg_queue_abort(MessageQueue *q)
 {
     SDL_LockMutex(q->mutex);
     q->abort_request = 1;
-    SDL_CondSignal(q->cond);
+    /* 使用 Broadcast 唤醒所有等待线程（可能有多个消费者） */
+    SDL_CondBroadcast(q->cond);
     SDL_UnlockMutex(q->mutex);
 }
 

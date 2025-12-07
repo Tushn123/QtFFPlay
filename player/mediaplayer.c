@@ -311,6 +311,10 @@ static int mp_msg_loop(void *arg)
     }
     
     av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Message loop stopped\n");
+    
+    /* 释放消息线程持有的引用 */
+    mp_dec_ref(mp);
+    
     return 0;
 }
 
@@ -420,15 +424,10 @@ static void mp_destroy(MediaPlayer *mp)
     
     av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Destroying MediaPlayer %p\n", mp);
     
-    /* 停止消息线程 */
-    if (mp->msg_thread) {
-        mp->msg_thread_running = 0;
-        msg_queue_abort(&mp->msg_queue);
-        SDL_WaitThread(mp->msg_thread, NULL);
-        mp->msg_thread = NULL;
-    }
+    /* 确保 shutdown 已经被调用 */
+    mp_shutdown(mp);
     
-    /* 销毁 FFPlayer */
+    /* 销毁 FFPlayer（完全清理，包括窗口和 SDL）*/
     if (mp->ffplayer) {
         ffp_shutdown(mp->ffplayer);
         mp->ffplayer = NULL;
@@ -447,6 +446,7 @@ static void mp_destroy(MediaPlayer *mp)
     pthread_mutex_destroy(&mp->mutex);
     
     /* 释放结构体 */
+    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] MediaPlayer destroyed\n");
     memset(mp, 0, sizeof(MediaPlayer));
     free(mp);
 }
@@ -529,6 +529,12 @@ void mp_shutdown(MediaPlayer *mp)
     if (!mp)
         return;
     
+    /* 防止重复 shutdown */
+    if (mp->mp_state == MP_STATE_END) {
+        av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] Already shutdown, skipping\n");
+        return;
+    }
+    
     av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Shutting down\n");
     
     /* 停止消息线程 */
@@ -539,12 +545,16 @@ void mp_shutdown(MediaPlayer *mp)
         mp->msg_thread = NULL;
     }
     
-    /* 停止 FFPlayer */
+    /* 停止 FFPlayer (包括渲染线程) */
     if (mp->ffplayer) {
+        /* 先停止渲染线程 */
+        ffp_stop_render_thread(mp->ffplayer);
+        /* 再停止播放流 */
         ffp_stop(mp->ffplayer);
     }
     
     mp->mp_state = MP_STATE_END;
+    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Shutdown complete\n");
 }
 
 /*

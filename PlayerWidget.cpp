@@ -26,6 +26,7 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_initialized(false)
     , m_msgLoopRunning(false)
     , m_lastState(MP_STATE_IDLE)
+    , m_startOnPrepared(false)
 {
     // 确保 widget 有原生窗口句柄
     setAttribute(Qt::WA_NativeWindow);
@@ -70,22 +71,34 @@ void PlayerWidget::initPlayer()
 
 void PlayerWidget::cleanupPlayer()
 {
+    qDebug() << "[PlayerWidget] cleanupPlayer called";
+    
     // 停止消息循环线程
     stopMessageLoop();
     
     if (m_mp) {
+        // 先关闭 MediaPlayer（会停止所有线程）
+        qDebug() << "[PlayerWidget] Shutting down MediaPlayer...";
+        mp_shutdown(m_mp);
+        
+        // 再释放资源
+        qDebug() << "[PlayerWidget] Releasing MediaPlayer...";
         mp_release(m_mp);
         m_mp = nullptr;
     }
     
     mp_global_uninit();
     m_initialized = false;
+    qDebug() << "[PlayerWidget] cleanupPlayer done";
 }
 
 void PlayerWidget::setMedia(const QString &path)
 {
     m_mediaPath = path;
     qDebug() << "setMedia:" << path;
+    
+    // 重置自动播放标志
+    m_startOnPrepared = false;
     
     // 确保播放器已初始化
     initPlayer();
@@ -128,10 +141,22 @@ void PlayerWidget::setMedia(const QString &path)
 
 void PlayerWidget::play()
 {
-    if (m_mp) {
-        int ret = mp_start(m_mp);
-        qDebug() << "mp_start returned:" << ret << ", state:" << mp_get_state(m_mp);
+    if (!m_mp) {
+        return;
     }
+    
+    int state = mp_get_state(m_mp);
+    
+    // 如果还在准备中，设置标志，等准备完成后自动播放
+    if (state == MP_STATE_ASYNC_PREPARING) {
+        qDebug() << "[PlayerWidget] Still preparing, will start on prepared";
+        m_startOnPrepared = true;
+        return;
+    }
+    
+    // 其他状态，直接调用 mp_start
+    int ret = mp_start(m_mp);
+    qDebug() << "mp_start returned:" << ret << ", state:" << state;
 }
 
 void PlayerWidget::pause()
@@ -304,6 +329,12 @@ void PlayerWidget::onMessage(int what, int arg1, int arg2)
         qDebug() << "[MSG] PREPARED";
         emit prepared();
         emit durationChanged(mp_get_duration(m_mp));
+        // 如果之前调用了 play()（在准备阶段），现在自动开始播放
+        if (m_startOnPrepared) {
+            qDebug() << "[MSG] Auto-starting playback as requested";
+            m_startOnPrepared = false;
+            play();
+        }
         break;
         
     case FFP_MSG_COMPLETED:
