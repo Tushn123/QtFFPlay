@@ -49,9 +49,6 @@ struct MediaPlayer {
     FFPlayer *ffplayer;             /* FFPlayer 实例 */
     MessageQueue msg_queue;         /* 消息队列 */
     
-    SDL_Thread *msg_thread;         /* 消息循环线程 */
-    int msg_thread_running;         /* 消息线程运行标志 */
-    
     int mp_state;                   /* 播放器状态 */
     char *data_source;              /* 数据源 URL */
     void *weak_thiz;                /* 用户数据指针 */
@@ -91,7 +88,6 @@ struct MediaPlayer {
  */
 static void mp_change_state_l(MediaPlayer *mp, int new_state);
 static void mp_destroy(MediaPlayer *mp);
-static int mp_msg_loop(void *arg);
 
 /* 带锁的内部函数 */
 static int mp_set_data_source_l(MediaPlayer *mp, const char *url);
@@ -147,176 +143,7 @@ static void mp_change_state_l(MediaPlayer *mp, int new_state)
     msg_queue_put_simple1(&mp->msg_queue, FFP_MSG_PLAYBACK_STATE_CHANGED);
 }
 
-/*
- * =============================================================================
- * 消息循环线程
- * =============================================================================
- */
-
-static int mp_msg_loop(void *arg)
-{
-    MediaPlayer *mp = (MediaPlayer *)arg;
-    AVMessage msg;
-    int retval;
-    
-    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Message loop started\n");
-    
-    while (mp->msg_thread_running) {
-        int continue_wait_next_msg = 0;
-        
-        retval = msg_queue_get(&mp->msg_queue, &msg, 1);  /* 阻塞等待 */
-        if (retval <= 0) {
-            if (retval < 0) {
-                /* 队列被中止 */
-                break;
-            }
-            continue;
-        }
-        
-        switch (msg.what) {
-        case FFP_MSG_FLUSH:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_MSG_FLUSH\n");
-            break;
-            
-        case FFP_MSG_PREPARED:
-            av_log(NULL, AV_LOG_INFO, "[MediaPlayer] FFP_MSG_PREPARED\n");
-            pthread_mutex_lock(&mp->mutex);
-            if (mp->mp_state == MP_STATE_ASYNC_PREPARING) {
-                mp_change_state_l(mp, MP_STATE_PREPARED);
-                /* 如果设置了 start_on_prepared，自动开始播放 */
-                if (mp->ffplayer && mp->ffplayer->start_on_prepared) {
-                    /* 发送开始请求 */
-                    msg_queue_put_simple1(&mp->msg_queue, FFP_REQ_START);
-                }
-            } else {
-                av_log(NULL, AV_LOG_WARNING, 
-                       "[MediaPlayer] FFP_MSG_PREPARED: unexpected state %d\n", mp->mp_state);
-            }
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_MSG_COMPLETED:
-            av_log(NULL, AV_LOG_INFO, "[MediaPlayer] FFP_MSG_COMPLETED\n");
-            pthread_mutex_lock(&mp->mutex);
-            mp->restart = 1;
-            mp->restart_from_beginning = 1;
-            mp_change_state_l(mp, MP_STATE_COMPLETED);
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_MSG_ERROR:
-            av_log(NULL, AV_LOG_ERROR, "[MediaPlayer] FFP_MSG_ERROR: %d\n", msg.arg1);
-            pthread_mutex_lock(&mp->mutex);
-            mp_change_state_l(mp, MP_STATE_ERROR);
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_MSG_SEEK_COMPLETE:
-            av_log(NULL, AV_LOG_INFO, "[MediaPlayer] FFP_MSG_SEEK_COMPLETE\n");
-            pthread_mutex_lock(&mp->mutex);
-            mp->seek_req = 0;
-            mp->seek_msec = 0;
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_REQ_START:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_REQ_START\n");
-            continue_wait_next_msg = 1;
-            pthread_mutex_lock(&mp->mutex);
-            if (0 == mp_chkst_start_l(mp->mp_state)) {
-                if (mp->restart) {
-                    if (mp->restart_from_beginning) {
-                        av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] restart from beginning\n");
-                        /* 从头开始播放 */
-                        if (mp->ffplayer) {
-                            ffp_seek_to(mp->ffplayer, 0);
-                            ffp_start(mp->ffplayer);
-                        }
-                        mp_change_state_l(mp, MP_STATE_STARTED);
-                    } else {
-                        av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] restart from current pos\n");
-                        if (mp->ffplayer) {
-                            ffp_start(mp->ffplayer);
-                        }
-                        mp_change_state_l(mp, MP_STATE_STARTED);
-                    }
-                    mp->restart = 0;
-                    mp->restart_from_beginning = 0;
-                } else {
-                    av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] start on fly\n");
-                    if (mp->ffplayer) {
-                        ffp_start(mp->ffplayer);
-                    }
-                    mp_change_state_l(mp, MP_STATE_STARTED);
-                }
-            }
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_REQ_PAUSE:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_REQ_PAUSE\n");
-            continue_wait_next_msg = 1;
-            pthread_mutex_lock(&mp->mutex);
-            if (0 == mp_chkst_pause_l(mp->mp_state)) {
-                if (mp->ffplayer) {
-                    ffp_pause(mp->ffplayer);
-                }
-                mp_change_state_l(mp, MP_STATE_PAUSED);
-            }
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_REQ_SEEK:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_REQ_SEEK: %d ms\n", msg.arg1);
-            continue_wait_next_msg = 1;
-            pthread_mutex_lock(&mp->mutex);
-            if (0 == mp_chkst_seek_l(mp->mp_state)) {
-                mp->restart_from_beginning = 0;
-                if (mp->ffplayer) {
-                    ffp_seek_to(mp->ffplayer, msg.arg1);
-                }
-            }
-            pthread_mutex_unlock(&mp->mutex);
-            break;
-            
-        case FFP_MSG_VIDEO_SIZE_CHANGED:
-            av_log(NULL, AV_LOG_INFO, "[MediaPlayer] FFP_MSG_VIDEO_SIZE_CHANGED: %dx%d\n", 
-                   msg.arg1, msg.arg2);
-            break;
-            
-        case FFP_MSG_BUFFERING_START:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_MSG_BUFFERING_START\n");
-            break;
-            
-        case FFP_MSG_BUFFERING_END:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_MSG_BUFFERING_END\n");
-            break;
-            
-        case FFP_MSG_PLAYBACK_STATE_CHANGED:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] FFP_MSG_PLAYBACK_STATE_CHANGED: state=%d\n",
-                   mp->mp_state);
-            break;
-            
-        default:
-            av_log(NULL, AV_LOG_DEBUG, "[MediaPlayer] Unknown message: %d\n", msg.what);
-            break;
-        }
-        
-        if (continue_wait_next_msg) {
-            msg_free_res(&msg);
-            continue;
-        }
-        
-        msg_free_res(&msg);
-    }
-    
-    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Message loop stopped\n");
-    
-    /* 释放消息线程持有的引用 */
-    mp_dec_ref(mp);
-    
-    return 0;
-}
+/* mp_msg_loop 已移除，消息循环由上层（Qt/Java）驱动，调用 mp_get_msg */
 
 /*
  * =============================================================================
@@ -404,8 +231,6 @@ MediaPlayer *mp_create(void)
     /* 初始化状态 */
     mp->mp_state = MP_STATE_IDLE;
     mp->ref_count = 1;
-    mp->msg_thread = NULL;
-    mp->msg_thread_running = 0;
     mp->data_source = NULL;
     mp->weak_thiz = NULL;
     mp->restart = 0;
@@ -537,13 +362,8 @@ void mp_shutdown(MediaPlayer *mp)
     
     av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Shutting down\n");
     
-    /* 停止消息线程 */
-    if (mp->msg_thread) {
-        mp->msg_thread_running = 0;
-        msg_queue_abort(&mp->msg_queue);
-        SDL_WaitThread(mp->msg_thread, NULL);
-        mp->msg_thread = NULL;
-    }
+    /* 中止消息队列（唤醒上层的消息循环线程） */
+    msg_queue_abort(&mp->msg_queue);
     
     /* 停止 FFPlayer (包括渲染线程) */
     if (mp->ffplayer) {
@@ -636,19 +456,10 @@ static int mp_prepare_async_l(MediaPlayer *mp)
     /* 启动消息队列 */
     msg_queue_start(&mp->msg_queue);
     
-    /* 启动消息循环线程 */
-    if (!mp->msg_thread) {
-        mp->msg_thread_running = 1;
-        mp_inc_ref(mp);  /* 消息线程持有引用 */
-        mp->msg_thread = SDL_CreateThread(mp_msg_loop, "mp_msg_loop", mp);
-        if (!mp->msg_thread) {
-            av_log(NULL, AV_LOG_ERROR, "[MediaPlayer] Failed to create message thread\n");
-            mp->msg_thread_running = 0;
-            mp_dec_ref(mp);
-            mp_change_state_l(mp, MP_STATE_ERROR);
-            return MP_ERR_INTERNAL;
-        }
-    }
+    /* 
+     * 注意：消息循环由上层（Qt/Java）驱动，不在这里启动线程
+     * 上层需要调用 mp_get_msg() 来驱动消息处理
+     */
     
     /* 调用 FFPlayer 准备 */
     int ret = ffp_prepare_async(mp->ffplayer, mp->data_source);
@@ -1145,15 +956,156 @@ int mp_get_audio_codec_info(MediaPlayer *mp, char **codec_info)
 /*
  * =============================================================================
  * 消息队列
+ * 
+ * mp_get_msg 是 ijkplayer 风格的"过滤+处理"函数：
+ * - 从队列取消息
+ * - 处理所有消息（状态更新、执行 FFPlayer 操作）
+ * - 过滤掉内部请求消息（FFP_REQ_*），继续取下一条
+ * - 返回通知消息（FFP_MSG_*）给上层
+ * 
+ * 上层（Qt/Java/iOS）驱动消息循环，调用此函数
  * =============================================================================
  */
 
 int mp_get_msg(MediaPlayer *mp, AVMessage *msg, int block)
 {
-    if (!mp)
+    if (!mp || !msg)
         return -1;
     
-    return msg_queue_get(&mp->msg_queue, msg, block);
+    while (1) {
+        int continue_wait_next_msg = 0;
+        
+        int retval = msg_queue_get(&mp->msg_queue, msg, block);
+        if (retval <= 0)
+            return retval;
+        
+        switch (msg->what) {
+        case FFP_MSG_FLUSH:
+            av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] FFP_MSG_FLUSH\n");
+            break;
+            
+        case FFP_MSG_PREPARED:
+            av_log(NULL, AV_LOG_INFO, "[mp_get_msg] FFP_MSG_PREPARED\n");
+            pthread_mutex_lock(&mp->mutex);
+            if (mp->mp_state == MP_STATE_ASYNC_PREPARING) {
+                mp_change_state_l(mp, MP_STATE_PREPARED);
+            } else {
+                av_log(NULL, AV_LOG_WARNING, 
+                       "[mp_get_msg] FFP_MSG_PREPARED: unexpected state %d\n", mp->mp_state);
+            }
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_MSG_COMPLETED:
+            av_log(NULL, AV_LOG_INFO, "[mp_get_msg] FFP_MSG_COMPLETED\n");
+            pthread_mutex_lock(&mp->mutex);
+            mp->restart = 1;
+            mp->restart_from_beginning = 1;
+            mp_change_state_l(mp, MP_STATE_COMPLETED);
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_MSG_ERROR:
+            av_log(NULL, AV_LOG_ERROR, "[mp_get_msg] FFP_MSG_ERROR: %d\n", msg->arg1);
+            pthread_mutex_lock(&mp->mutex);
+            mp_change_state_l(mp, MP_STATE_ERROR);
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_MSG_SEEK_COMPLETE:
+            av_log(NULL, AV_LOG_INFO, "[mp_get_msg] FFP_MSG_SEEK_COMPLETE\n");
+            pthread_mutex_lock(&mp->mutex);
+            mp->seek_req = 0;
+            mp->seek_msec = 0;
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_REQ_START:
+            av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] FFP_REQ_START\n");
+            continue_wait_next_msg = 1;  /* 内部消息，不返回给上层 */
+            pthread_mutex_lock(&mp->mutex);
+            if (0 == mp_chkst_start_l(mp->mp_state)) {
+                if (mp->restart) {
+                    if (mp->restart_from_beginning) {
+                        av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] restart from beginning\n");
+                        if (mp->ffplayer) {
+                            ffp_seek_to(mp->ffplayer, 0);
+                            ffp_start(mp->ffplayer);
+                        }
+                        mp_change_state_l(mp, MP_STATE_STARTED);
+                    } else {
+                        av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] restart from current pos\n");
+                        if (mp->ffplayer) {
+                            ffp_start(mp->ffplayer);
+                        }
+                        mp_change_state_l(mp, MP_STATE_STARTED);
+                    }
+                    mp->restart = 0;
+                    mp->restart_from_beginning = 0;
+                } else {
+                    av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] start on fly\n");
+                    if (mp->ffplayer) {
+                        ffp_start(mp->ffplayer);
+                    }
+                    mp_change_state_l(mp, MP_STATE_STARTED);
+                }
+            }
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_REQ_PAUSE:
+            av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] FFP_REQ_PAUSE\n");
+            continue_wait_next_msg = 1;  /* 内部消息，不返回给上层 */
+            pthread_mutex_lock(&mp->mutex);
+            if (0 == mp_chkst_pause_l(mp->mp_state)) {
+                if (mp->ffplayer) {
+                    ffp_pause(mp->ffplayer);
+                }
+                mp_change_state_l(mp, MP_STATE_PAUSED);
+            }
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_REQ_SEEK:
+            av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] FFP_REQ_SEEK: %d ms\n", msg->arg1);
+            continue_wait_next_msg = 1;  /* 内部消息，不返回给上层 */
+            pthread_mutex_lock(&mp->mutex);
+            if (0 == mp_chkst_seek_l(mp->mp_state)) {
+                mp->restart_from_beginning = 0;
+                if (mp->ffplayer) {
+                    ffp_seek_to(mp->ffplayer, msg->arg1);
+                }
+            }
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        case FFP_MSG_VIDEO_SIZE_CHANGED:
+            av_log(NULL, AV_LOG_INFO, "[mp_get_msg] FFP_MSG_VIDEO_SIZE_CHANGED: %dx%d\n", 
+                   msg->arg1, msg->arg2);
+            break;
+            
+        case FFP_MSG_BUFFERING_START:
+        case FFP_MSG_BUFFERING_END:
+        case FFP_MSG_PLAYBACK_STATE_CHANGED:
+            /* 这些消息直接返回给上层 */
+            break;
+            
+        default:
+            av_log(NULL, AV_LOG_DEBUG, "[mp_get_msg] Unknown message: %d\n", msg->what);
+            break;
+        }
+        
+        /* 内部请求消息被消费掉，继续取下一条 */
+        if (continue_wait_next_msg) {
+            msg_free_res(msg);
+            continue;
+        }
+        
+        /* 通知消息返回给上层 */
+        return retval;
+    }
+    
+    return -1;
 }
 
 void mp_abort_msg_queue(MediaPlayer *mp)

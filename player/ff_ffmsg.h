@@ -126,16 +126,18 @@
  * 属性ID - 整数类型
  * =============================================================================
  */
-#define FFP_PROP_INT64_SELECTED_VIDEO_STREAM            20001
-#define FFP_PROP_INT64_SELECTED_AUDIO_STREAM            20002
-#define FFP_PROP_INT64_VIDEO_DECODER                    20003
-#define FFP_PROP_INT64_AUDIO_DECODER                    20004
-#define FFP_PROP_INT64_VIDEO_CACHED_DURATION            20005
-#define FFP_PROP_INT64_AUDIO_CACHED_DURATION            20006
-#define FFP_PROP_INT64_VIDEO_CACHED_BYTES               20007
-#define FFP_PROP_INT64_AUDIO_CACHED_BYTES               20008
-#define FFP_PROP_INT64_VIDEO_CACHED_PACKETS             20009
-#define FFP_PROP_INT64_AUDIO_CACHED_PACKETS             20010
+#define FFP_PROP_INT64_CURRENT_POSITION                 20000
+#define FFP_PROP_INT64_DURATION                         20001
+#define FFP_PROP_INT64_SELECTED_VIDEO_STREAM            20002
+#define FFP_PROP_INT64_SELECTED_AUDIO_STREAM            20003
+#define FFP_PROP_INT64_VIDEO_DECODER                    20004
+#define FFP_PROP_INT64_AUDIO_DECODER                    20005
+#define FFP_PROP_INT64_VIDEO_CACHED_DURATION            20006
+#define FFP_PROP_INT64_AUDIO_CACHED_DURATION            20007
+#define FFP_PROP_INT64_VIDEO_CACHED_BYTES               20008
+#define FFP_PROP_INT64_AUDIO_CACHED_BYTES               20009
+#define FFP_PROP_INT64_VIDEO_CACHED_PACKETS             20010
+#define FFP_PROP_INT64_AUDIO_CACHED_PACKETS             20011
 #define FFP_PROP_INT64_BIT_RATE                         20100
 
 #endif /* FF_FFMSG_H */

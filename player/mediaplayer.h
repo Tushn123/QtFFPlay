@@ -536,9 +536,18 @@ int mp_get_audio_codec_info(MediaPlayer *mp, char **codec_info);
  */
 
 /**
- * 获取消息
+ * 获取消息（ijkplayer 风格的过滤+处理函数）
+ * 
+ * 这个函数是 ijkplayer 的核心设计：
+ * - 从消息队列取消息
+ * - 内部处理所有消息（状态更新、执行 FFPlayer 操作）
+ * - 过滤掉内部请求消息（FFP_REQ_*），继续取下一条
+ * - 只返回通知消息（FFP_MSG_*）给上层
+ * 
+ * 上层（Qt/Java/iOS）应该在独立线程中循环调用此函数来驱动消息处理
+ * 
  * @param mp MediaPlayer 实例
- * @param msg 输出消息
+ * @param msg 输出消息（只返回 FFP_MSG_* 消息）
  * @param block 是否阻塞等待
  * @return < 0 中止, 0 无消息, > 0 有消息
  */
@@ -570,6 +579,7 @@ void *mp_get_weak_thiz(MediaPlayer *mp);
  * @return 原用户数据指针
  */
 void *mp_set_weak_thiz(MediaPlayer *mp, void *weak_thiz);
+
 
 /*
  * =============================================================================

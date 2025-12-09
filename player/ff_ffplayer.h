@@ -34,19 +34,13 @@
 #define FFP_OPT_CATEGORY_SWR      5   /* SwrContext options */
 
 /*
- * Property IDs for ffp_get_property_* / ffp_set_property_*
+ * Property IDs - 已移至 ff_ffmsg.h，避免重复定义
+ * 使用 ff_ffmsg.h 中的定义：
+ *   FFP_PROP_FLOAT_PLAYBACK_RATE, FFP_PROP_FLOAT_PLAYBACK_VOLUME
+ *   FFP_PROP_INT64_VIDEO_CACHED_BYTES, FFP_PROP_INT64_AUDIO_CACHED_BYTES
+ *   FFP_PROP_INT64_VIDEO_CACHED_PACKETS, FFP_PROP_INT64_AUDIO_CACHED_PACKETS
  */
-/* Float properties */
-#define FFP_PROP_FLOAT_PLAYBACK_RATE            0
-#define FFP_PROP_FLOAT_PLAYBACK_VOLUME          1
-
-/* Int64 properties */
-#define FFP_PROP_INT64_CURRENT_POSITION         1000
-#define FFP_PROP_INT64_DURATION                 1001
-#define FFP_PROP_INT64_VIDEO_CACHED_BYTES       1002
-#define FFP_PROP_INT64_AUDIO_CACHED_BYTES       1003
-#define FFP_PROP_INT64_VIDEO_CACHED_PACKETS     1004
-#define FFP_PROP_INT64_AUDIO_CACHED_PACKETS     1005
+#include "ff_ffmsg.h"
 
 /**
  * FFPlayer - 播放器实例结构体
@@ -116,7 +110,7 @@ typedef struct FFPlayer {
     /* SDL 窗口和音频 */
     SDL_Window *window;
     void *native_window;
-    int use_external_window;    /* 1: SDL_CreateWindowFrom 成功，直接使用外部窗口 */
+    int use_external_window;    /* 已废弃，总是 0（只使用子窗口模式）*/
     SDL_AudioDeviceID audio_dev;
 
     /* 视频输出 (OpenGL) */

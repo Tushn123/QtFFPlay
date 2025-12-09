@@ -66,7 +66,7 @@ private:
     void initPlayer();
     void cleanupPlayer();
     
-    // 消息循环线程
+    // 消息循环线程（ijkplayer 风格：上层驱动消息循环）
     void startMessageLoop();
     void stopMessageLoop();
     static void messageLoopThread(PlayerWidget *self);

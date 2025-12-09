@@ -627,10 +627,14 @@ void vout_render_begin(FFVout *vout)
     if (result != 0 && begin_count < 5) {
         SDL_Log("[RENDER_BEGIN] SDL_GL_MakeCurrent failed: %s", SDL_GetError());
     }
+
+    /* 关键修复：确保在渲染线程的 OpenGL 上下文中设置正确的 Viewport */
+    glViewport(0, 0, vout->viewport_width, vout->viewport_height);
     
     if (begin_count < 3) {
-        SDL_Log("[RENDER_BEGIN] #%d: window=%p, gl_ctx=%p, result=%d",
-                begin_count, vout->window, vout->gl_ctx, result);
+        SDL_Log("[RENDER_BEGIN] #%d: window=%p, gl_ctx=%p, result=%d, viewport=%dx%d",
+                begin_count, vout->window, vout->gl_ctx, result, 
+                vout->viewport_width, vout->viewport_height);
     }
     begin_count++;
 }

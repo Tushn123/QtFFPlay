@@ -126,7 +126,7 @@ void PlayerWidget::setMedia(const QString &path)
     
     qDebug() << "Data source set, state:" << mp_get_state(m_mp);
     
-    // 启动消息循环线程
+    // 启动消息循环线程（ijkplayer 风格：上层驱动消息循环）
     startMessageLoop();
     
     // 异步准备
@@ -173,9 +173,6 @@ void PlayerWidget::stop()
         int ret = mp_stop(m_mp);
         qDebug() << "mp_stop returned:" << ret << ", state:" << mp_get_state(m_mp);
     }
-    
-    // 停止消息循环线程
-    stopMessageLoop();
 }
 
 void PlayerWidget::togglePause()
@@ -234,6 +231,9 @@ long PlayerWidget::getDuration() const
 /*
  * =============================================================================
  * 消息循环线程实现 - 参考 ijkplayer 的 message_loop_n
+ * 
+ * ijkplayer 的设计：上层（JNI/Qt）驱动消息循环，调用 mp_get_msg()
+ * mp_get_msg() 内部处理状态更新，过滤内部消息，只返回通知消息
  * =============================================================================
  */
 
@@ -273,6 +273,13 @@ void PlayerWidget::messageLoopThread(PlayerWidget *self)
     self->messageLoop();
 }
 
+/*
+ * 消息循环函数 - 参考 ijkplayer 的 message_loop_n
+ * 
+ * 在独立线程中运行，调用 mp_get_msg() 获取消息
+ * mp_get_msg() 已经处理了状态更新和内部消息过滤
+ * 这里只需要将返回的通知消息转发到 Qt 主线程
+ */
 void PlayerWidget::messageLoop()
 {
     qDebug() << "[MessageLoop] Thread started";
@@ -284,8 +291,9 @@ void PlayerWidget::messageLoop()
         
         AVMessage msg;
         
-        // 阻塞方式获取消息（参考 ijkplayer 的 message_loop_n）
-        int retval = mp_get_msg(m_mp, &msg, 1);
+        // 调用 mp_get_msg（ijkplayer 风格的过滤+处理函数）
+        // mp_get_msg 内部已处理状态更新，只返回 FFP_MSG_* 通知消息
+        int retval = mp_get_msg(m_mp, &msg, 1);  // 阻塞等待
         
         if (retval < 0) {
             // 消息队列被中止
