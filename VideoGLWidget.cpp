@@ -19,7 +19,7 @@ extern "C" {
 #undef class
 
 // 缩放范围常量
-static const float ZOOM_MIN = 1.0f;
+static const float ZOOM_MIN = 0.5f;
 static const float ZOOM_MAX = 10.0f;
 static const float ZOOM_STEP = 0.1f;  // 每次滚轮缩放步进
 
