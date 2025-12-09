@@ -42,6 +42,40 @@
  */
 #include "ff_ffmsg.h"
 
+/*
+ * =============================================================================
+ * 渲染模式和回调定义
+ * =============================================================================
+ */
+
+/**
+ * 渲染模式
+ */
+typedef enum FFPRenderMode {
+    FFP_RENDER_MODE_SDL = 0,       /* SDL 子窗口渲染（默认）*/
+    FFP_RENDER_MODE_CALLBACK = 1,  /* 回调模式，外部渲染 */
+} FFPRenderMode;
+
+/**
+ * 传递给外部的视频帧数据
+ */
+typedef struct FFPVideoFrame {
+    uint8_t *data[4];      /* YUV/RGB 数据平面 */
+    int linesize[4];       /* 每行字节数 */
+    int width;             /* 帧宽度 */
+    int height;            /* 帧高度 */
+    int format;            /* 像素格式 (AVPixelFormat) */
+    double pts;            /* 显示时间戳（秒）*/
+    int64_t pos;           /* 文件位置 */
+} FFPVideoFrame;
+
+/**
+ * 视频帧回调函数类型
+ * @param opaque 用户数据指针
+ * @param frame 视频帧数据（在回调返回后可能失效，需立即复制）
+ */
+typedef void (*ffp_video_frame_callback)(void *opaque, FFPVideoFrame *frame);
+
 /**
  * FFPlayer - 播放器实例结构体
  * 
@@ -159,6 +193,13 @@ typedef struct FFPlayer {
     /* 外部消息队列（指向 MediaPlayer 的 msg_queue）*/
     /* 用于 FFPlayer 层向 MediaPlayer 层发送事件通知 */
     struct MessageQueue *ext_msg_queue;
+
+    /* 渲染模式 */
+    FFPRenderMode render_mode;
+    
+    /* 回调渲染相关 */
+    ffp_video_frame_callback video_frame_cb;
+    void *video_frame_cb_opaque;
 
 } FFPlayer;
 
@@ -547,5 +588,33 @@ void ffp_set_playback_rate(FFPlayer *ffp, float rate);
  * @return 旋转角度（度），当前空实现返回0
  */
 int ffp_get_video_rotate_degrees(FFPlayer *ffp);
+
+/*
+ * =============================================================================
+ * 渲染模式设置
+ * =============================================================================
+ */
+
+/**
+ * 设置渲染模式
+ * @param ffp FFPlayer实例
+ * @param mode 渲染模式 (FFP_RENDER_MODE_SDL 或 FFP_RENDER_MODE_CALLBACK)
+ */
+void ffp_set_render_mode(FFPlayer *ffp, FFPRenderMode mode);
+
+/**
+ * 获取渲染模式
+ * @param ffp FFPlayer实例
+ * @return 当前渲染模式
+ */
+FFPRenderMode ffp_get_render_mode(FFPlayer *ffp);
+
+/**
+ * 设置视频帧回调函数（用于 FFP_RENDER_MODE_CALLBACK 模式）
+ * @param ffp FFPlayer实例
+ * @param cb 回调函数
+ * @param opaque 传递给回调的用户数据
+ */
+void ffp_set_video_frame_callback(FFPlayer *ffp, ffp_video_frame_callback cb, void *opaque);
 
 #endif /* FF_FFPLAYER_H */

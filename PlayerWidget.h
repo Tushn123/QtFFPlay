@@ -2,11 +2,22 @@
 #define PLAYERWIDGET_H
 
 #include <QWidget>
+#include <QVBoxLayout>
 #include <thread>
 #include <atomic>
 
-// Forward declaration
+// Forward declarations
 typedef struct MediaPlayer MediaPlayer;
+struct FFPVideoFrame;
+class VideoGLWidget;
+
+/**
+ * 渲染模式
+ */
+enum class RenderMode {
+    SDL,      // SDL 子窗口渲染
+    OpenGL    // Qt OpenGL 渲染（默认）
+};
 
 class PlayerWidget : public QWidget
 {
@@ -15,6 +26,13 @@ class PlayerWidget : public QWidget
 public:
     explicit PlayerWidget(QWidget *parent = nullptr);
     ~PlayerWidget();
+
+    /**
+     * 设置渲染模式（必须在 setMedia 之前调用）
+     * @param mode 渲染模式
+     */
+    void setRenderMode(RenderMode mode);
+    RenderMode renderMode() const { return m_renderMode; }
 
     void setMedia(const QString &path);
     void play();
@@ -30,8 +48,12 @@ public:
     long getCurrentPosition() const;
     long getDuration() const;
 
+    // 获取 OpenGL 渲染组件
+    VideoGLWidget* videoWidget() const { return m_videoWidget; }
+
 protected:
     void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
 
 signals:
@@ -65,6 +87,10 @@ private slots:
 private:
     void initPlayer();
     void cleanupPlayer();
+    void setupLayout();
+    
+    // 视频帧回调（静态，供 C 层调用）
+    static void videoFrameCallback(void *opaque, FFPVideoFrame *frame);
     
     // 消息循环线程（ijkplayer 风格：上层驱动消息循环）
     void startMessageLoop();
@@ -75,6 +101,13 @@ private:
     MediaPlayer *m_mp;
     QString m_mediaPath;
     bool m_initialized;
+    
+    // 渲染模式
+    RenderMode m_renderMode;
+    
+    // OpenGL 渲染组件
+    VideoGLWidget *m_videoWidget;
+    QVBoxLayout *m_layout;
     
     // 消息线程
     std::thread m_msgThread;

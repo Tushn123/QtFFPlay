@@ -1,11 +1,12 @@
 TEMPLATE = app
 CONFIG += c++11
 CONFIG += console
-QT += core gui widgets
+QT += core gui widgets opengl
 
 SOURCES += \
     main.cpp \
     PlayerWidget.cpp \
+    VideoGLWidget.cpp \
     player/ffplay.c \
     player/ff_ffplayer.c \
     player/ff_vout.c \
@@ -18,6 +19,7 @@ SOURCES += \
 
 HEADERS += \
     PlayerWidget.h \
+    VideoGLWidget.h \
     player/ff_define.h \
     player/ff_types.h \
     player/ff_queue.h \

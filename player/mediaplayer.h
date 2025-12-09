@@ -27,6 +27,7 @@
 #define MEDIAPLAYER_H
 
 #include "ff_ffmsg_queue.h"
+#include "ff_ffplayer.h"  /* For FFPRenderMode, FFPVideoFrame, ffp_video_frame_callback */
 
 #ifdef __cplusplus
 extern "C" {
@@ -580,6 +581,40 @@ void *mp_get_weak_thiz(MediaPlayer *mp);
  */
 void *mp_set_weak_thiz(MediaPlayer *mp, void *weak_thiz);
 
+
+/*
+ * =============================================================================
+ * 渲染模式设置
+ * =============================================================================
+ */
+
+/**
+ * 设置渲染模式
+ * @param mp MediaPlayer 实例
+ * @param mode 渲染模式 (FFP_RENDER_MODE_SDL 或 FFP_RENDER_MODE_CALLBACK)
+ */
+void mp_set_render_mode(MediaPlayer *mp, FFPRenderMode mode);
+
+/**
+ * 获取渲染模式
+ * @param mp MediaPlayer 实例
+ * @return 当前渲染模式
+ */
+FFPRenderMode mp_get_render_mode(MediaPlayer *mp);
+
+/**
+ * 设置视频帧回调函数
+ * 
+ * 当 render_mode 为 FFP_RENDER_MODE_CALLBACK 时，每当有新帧需要显示时，
+ * 将调用此回调函数。回调在内部渲染线程中调用，需要注意线程安全。
+ * 
+ * 帧数据在回调返回后可能失效，如果需要保留数据，请在回调中复制。
+ * 
+ * @param mp MediaPlayer 实例
+ * @param cb 回调函数
+ * @param opaque 传递给回调的用户数据
+ */
+void mp_set_video_frame_callback(MediaPlayer *mp, ffp_video_frame_callback cb, void *opaque);
 
 /*
  * =============================================================================

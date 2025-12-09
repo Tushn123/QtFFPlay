@@ -1144,6 +1144,36 @@ void *mp_set_weak_thiz(MediaPlayer *mp, void *weak_thiz)
 
 /*
  * =============================================================================
+ * 渲染模式设置
+ * =============================================================================
+ */
+
+void mp_set_render_mode(MediaPlayer *mp, FFPRenderMode mode)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    ffp_set_render_mode(mp->ffplayer, mode);
+}
+
+FFPRenderMode mp_get_render_mode(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return FFP_RENDER_MODE_SDL;
+    
+    return ffp_get_render_mode(mp->ffplayer);
+}
+
+void mp_set_video_frame_callback(MediaPlayer *mp, ffp_video_frame_callback cb, void *opaque)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    ffp_set_video_frame_callback(mp->ffplayer, cb, opaque);
+}
+
+/*
+ * =============================================================================
  * FFPlayer 访问
  * =============================================================================
  */

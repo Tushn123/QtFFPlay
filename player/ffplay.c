@@ -543,27 +543,46 @@ int video_open(FFPlayer *ffp, VideoState *is)
     w = ffp->screen_width ? ffp->screen_width : ffp->default_width;
     h = ffp->screen_height ? ffp->screen_height : ffp->default_height;
 
-    av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Called: native_window=%p, window=%p, size=%dx%d\n",
-           ffp->native_window, ffp->window, w, h);
+    av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Called: render_mode=%d, native_window=%p, window=%p, size=%dx%d\n",
+           ffp->render_mode, ffp->native_window, ffp->window, w, h);
 
-    /* 对于从原生窗口创建的 SDL 窗口，不要修改窗口属性 */
-    if (!ffp->native_window) {
-    if (!ffp->window_title)
-        ffp->window_title = ffp->input_filename;
-    SDL_SetWindowTitle(ffp->window, ffp->window_title);
-
-    SDL_SetWindowSize(ffp->window, w, h);
-    SDL_SetWindowPosition(ffp->window, ffp->screen_left, ffp->screen_top);
-    if (ffp->is_full_screen)
-        SDL_SetWindowFullscreen(ffp->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-    SDL_ShowWindow(ffp->window);
-    } else {
-        /* 对于嵌入式窗口，使用实际窗口大小 */
-        SDL_GetWindowSize(ffp->window, &w, &h);
+    /* 回调模式：不需要窗口操作，只设置尺寸 */
+    if (ffp->render_mode == FFP_RENDER_MODE_CALLBACK) {
+        /* 从视频流获取实际尺寸 */
+        if (is->video_st && is->video_st->codecpar) {
+            w = is->video_st->codecpar->width;
+            h = is->video_st->codecpar->height;
+        }
+        is->width = w;
+        is->height = h;
+        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Callback mode: video size %dx%d\n", w, h);
+        ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, w, h);
+        return 0;
     }
 
-    /* 更新 OpenGL 视口大小 */
-    vout_set_size(ffp->vout, w, h);
+    /* SDL 模式：窗口操作 */
+    if (ffp->window) {
+        /* 对于从原生窗口创建的 SDL 窗口，不要修改窗口属性 */
+        if (!ffp->native_window) {
+            if (!ffp->window_title)
+                ffp->window_title = ffp->input_filename;
+            SDL_SetWindowTitle(ffp->window, ffp->window_title);
+
+            SDL_SetWindowSize(ffp->window, w, h);
+            SDL_SetWindowPosition(ffp->window, ffp->screen_left, ffp->screen_top);
+            if (ffp->is_full_screen)
+                SDL_SetWindowFullscreen(ffp->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+            SDL_ShowWindow(ffp->window);
+        } else {
+            /* 对于嵌入式窗口，使用实际窗口大小 */
+            SDL_GetWindowSize(ffp->window, &w, &h);
+        }
+
+        /* 更新 OpenGL 视口大小 */
+        if (ffp->vout) {
+            vout_set_size(ffp->vout, w, h);
+        }
+    }
 
     is->width  = w;
     is->height = h;
@@ -596,10 +615,43 @@ void video_display(FFPlayer *ffp, VideoState *is)
     }
 
     if (display_count < 10 || display_count % 60 == 0) {
-        av_log(NULL, AV_LOG_INFO, "[DISPLAY] #%d: width=%d, show_mode=%d, video_st=%p, audio_st=%p\n",
-               display_count, is->width, is->show_mode, is->video_st, is->audio_st);
+        av_log(NULL, AV_LOG_INFO, "[DISPLAY] #%d: width=%d, show_mode=%d, video_st=%p, audio_st=%p, render_mode=%d\n",
+               display_count, is->width, is->show_mode, is->video_st, is->audio_st, ffp->render_mode);
     }
 
+    /* 回调模式：通过回调传递帧数据给外部渲染 */
+    if (ffp->render_mode == FFP_RENDER_MODE_CALLBACK) {
+        if (is->video_st && ffp->video_frame_cb) {
+            Frame *vp = frame_queue_peek_last(&is->pictq);
+            if (vp && vp->frame) {
+                FFPVideoFrame frame;
+                frame.data[0] = vp->frame->data[0];
+                frame.data[1] = vp->frame->data[1];
+                frame.data[2] = vp->frame->data[2];
+                frame.data[3] = vp->frame->data[3];
+                frame.linesize[0] = vp->frame->linesize[0];
+                frame.linesize[1] = vp->frame->linesize[1];
+                frame.linesize[2] = vp->frame->linesize[2];
+                frame.linesize[3] = vp->frame->linesize[3];
+                frame.width = vp->frame->width;
+                frame.height = vp->frame->height;
+                frame.format = vp->frame->format;
+                frame.pts = vp->pts;
+                frame.pos = vp->pos;
+                
+                ffp->video_frame_cb(ffp->video_frame_cb_opaque, &frame);
+                
+                if (display_count < 10) {
+                    av_log(NULL, AV_LOG_INFO, "[DISPLAY] Callback mode: sent frame %dx%d, format=%d, pts=%.3f\n",
+                           frame.width, frame.height, frame.format, frame.pts);
+                }
+            }
+        }
+        display_count++;
+        return;  /* 回调模式直接返回，不执行 SDL 渲染 */
+    }
+
+    /* SDL 模式：原有渲染逻辑 */
     vout_render_begin(ffp->vout);
     vout_clear(ffp->vout, 0, 0, 0);
     if (is->audio_st && is->show_mode != SHOW_MODE_VIDEO)

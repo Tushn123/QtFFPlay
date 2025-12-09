@@ -2,11 +2,13 @@
  * Copyright (c) 2024 FFPlayer contributors
  *
  * PlayerWidget 实现 - 使用 MediaPlayer 层
- * 参考 ijkplayer 的 message_loop_n 实现消息循环
+ * 支持两种渲染模式：SDL 子窗口渲染 和 Qt OpenGL 渲染
  */
 
 #include "PlayerWidget.h"
+#include "VideoGLWidget.h"
 #include <QKeyEvent>
+#include <QResizeEvent>
 #include <QDebug>
 #include <QPainter>
 #include <QMetaObject>
@@ -24,23 +26,68 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     : QWidget(parent)
     , m_mp(nullptr)
     , m_initialized(false)
+    , m_renderMode(RenderMode::OpenGL)  // 默认使用 OpenGL 渲染
+    , m_videoWidget(nullptr)
+    , m_layout(nullptr)
     , m_msgLoopRunning(false)
     , m_lastState(MP_STATE_IDLE)
     , m_startOnPrepared(false)
 {
-    // 确保 widget 有原生窗口句柄
-    setAttribute(Qt::WA_NativeWindow);
-    
     // 设置焦点策略以接收键盘事件
     setFocusPolicy(Qt::StrongFocus);
     
     // 设置最小尺寸
     setMinimumSize(320, 240);
     
+    // 设置黑色背景
+    setAutoFillBackground(true);
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, Qt::black);
+    setPalette(pal);
+    
+    // 设置布局
+    setupLayout();
+    
     // 连接消息处理信号槽（使用 QueuedConnection 跨线程）
     connect(this, &PlayerWidget::stateChanged, this, [this](int state) {
         qDebug() << "[PlayerWidget] State changed to:" << state;
     });
+}
+
+void PlayerWidget::setupLayout()
+{
+    // 创建布局
+    m_layout = new QVBoxLayout(this);
+    m_layout->setContentsMargins(0, 0, 0, 0);
+    m_layout->setSpacing(0);
+    
+    // 创建 OpenGL 渲染组件
+    m_videoWidget = new VideoGLWidget(this);
+    m_layout->addWidget(m_videoWidget);
+    
+    // 连接视频尺寸变化信号
+    connect(m_videoWidget, &VideoGLWidget::videoSizeChanged, this, &PlayerWidget::videoSizeChanged);
+}
+
+void PlayerWidget::setRenderMode(RenderMode mode)
+{
+    if (m_initialized) {
+        qWarning() << "[PlayerWidget] Cannot change render mode after initialization";
+        return;
+    }
+    m_renderMode = mode;
+    
+    // 根据模式显示/隐藏 OpenGL 组件
+    if (m_videoWidget) {
+        m_videoWidget->setVisible(mode == RenderMode::OpenGL);
+    }
+    
+    // SDL 模式需要原生窗口句柄
+    if (mode == RenderMode::SDL) {
+        setAttribute(Qt::WA_NativeWindow);
+    }
+    
+    qDebug() << "[PlayerWidget] Render mode set to:" << (mode == RenderMode::OpenGL ? "OpenGL" : "SDL");
 }
 
 PlayerWidget::~PlayerWidget()
@@ -64,9 +111,28 @@ void PlayerWidget::initPlayer()
         return;
     }
     
+    // 设置渲染模式
+    if (m_renderMode == RenderMode::OpenGL) {
+        mp_set_render_mode(m_mp, FFP_RENDER_MODE_CALLBACK);
+        mp_set_video_frame_callback(m_mp, videoFrameCallback, this);
+        qDebug() << "[PlayerWidget] Using OpenGL callback rendering";
+    } else {
+        mp_set_render_mode(m_mp, FFP_RENDER_MODE_SDL);
+        qDebug() << "[PlayerWidget] Using SDL rendering";
+    }
+    
     m_initialized = true;
     m_lastState = MP_STATE_IDLE;
     qDebug() << "MediaPlayer initialized, state:" << mp_get_state(m_mp);
+}
+
+// 视频帧回调函数（静态）
+void PlayerWidget::videoFrameCallback(void *opaque, FFPVideoFrame *frame)
+{
+    PlayerWidget *self = static_cast<PlayerWidget*>(opaque);
+    if (self && self->m_videoWidget) {
+        self->m_videoWidget->updateFrame(frame);
+    }
 }
 
 void PlayerWidget::cleanupPlayer()
@@ -87,6 +153,11 @@ void PlayerWidget::cleanupPlayer()
         m_mp = nullptr;
     }
     
+    // 清除视频显示
+    if (m_videoWidget) {
+        m_videoWidget->clearFrame();
+    }
+    
     mp_global_uninit();
     m_initialized = false;
     qDebug() << "[PlayerWidget] cleanupPlayer done";
@@ -100,6 +171,11 @@ void PlayerWidget::setMedia(const QString &path)
     // 重置自动播放标志
     m_startOnPrepared = false;
     
+    // 清除之前的视频帧
+    if (m_videoWidget) {
+        m_videoWidget->clearFrame();
+    }
+    
     // 确保播放器已初始化
     initPlayer();
     
@@ -108,14 +184,17 @@ void PlayerWidget::setMedia(const QString &path)
         return;
     }
     
-    // 附加窗口
-    if (mp_attach_window(m_mp, (void*)winId(), width(), height()) < 0) {
-        qWarning() << "Failed to attach window";
-        emit errorOccurred("Failed to attach window");
-        return;
+    // SDL 模式需要附加窗口
+    if (m_renderMode == RenderMode::SDL) {
+        if (mp_attach_window(m_mp, (void*)winId(), width(), height()) < 0) {
+            qWarning() << "Failed to attach window";
+            emit errorOccurred("Failed to attach window");
+            return;
+        }
+        qDebug() << "Window attached successfully (SDL mode)";
+    } else {
+        qDebug() << "Using OpenGL callback mode, no window attachment needed";
     }
-    
-    qDebug() << "Window attached successfully";
     
     // 设置数据源
     if (mp_set_data_source(m_mp, m_mediaPath.toUtf8().constData()) < 0) {
@@ -402,6 +481,14 @@ void PlayerWidget::onMessage(int what, int arg1, int arg2)
 void PlayerWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+}
+
+void PlayerWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    
+    // OpenGL 模式下 VideoGLWidget 会自动调整
+    // SDL 模式下可能需要通知 MediaPlayer
 }
 
 void PlayerWidget::keyPressEvent(QKeyEvent *event)

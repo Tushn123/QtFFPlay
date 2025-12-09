@@ -178,6 +178,11 @@ void ffp_set_defaults(FFPlayer *ffp)
     ffp->codec_opts = NULL;
     ffp->sws_dict = NULL;
     ffp->swr_opts = NULL;
+    
+    /* 渲染模式 */
+    ffp->render_mode = FFP_RENDER_MODE_SDL;
+    ffp->video_frame_cb = NULL;
+    ffp->video_frame_cb_opaque = NULL;
 }
 
 FFPlayer *ffp_create(void)
@@ -791,6 +796,23 @@ int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
     if (!ffp->input_filename)
         return -1;
 
+    /* 回调模式下，需要初始化 SDL 音频（但不创建窗口）*/
+    if (ffp->render_mode == FFP_RENDER_MODE_CALLBACK) {
+        int flags = SDL_INIT_AUDIO | SDL_INIT_TIMER;
+        if (ffp->audio_disable)
+            flags &= ~SDL_INIT_AUDIO;
+        
+        if (SDL_Init(flags)) {
+            av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL (audio) - %s\n", SDL_GetError());
+            return -1;
+        }
+        av_log(NULL, AV_LOG_INFO, "[PREPARE] SDL audio initialized (callback mode)\n");
+        
+        /* 回调模式下禁用自动渲染线程，视频由外部渲染 */
+        ffp->auto_render_enabled = 0;
+        ffp->display_disable = 0;  /* 仍需要处理视频逻辑 */
+    }
+
     /* 调用 stream_open 创建 VideoState */
     ffp->is = stream_open(ffp, ffp->input_filename, ffp->iformat);
     if (!ffp->is) {
@@ -809,7 +831,7 @@ int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
      */
     ffp_notify_msg1(ffp, FFP_MSG_PREPARED);
     
-    /* 注意：渲染线程将在视频流打开后（video_open）自动启动 */
+    /* 注意：SDL 模式下渲染线程将在视频流打开后（video_open）自动启动 */
     return 0;
 }
 
@@ -820,13 +842,19 @@ int ffp_start(FFPlayer *ffp)
         return -1;
     }
 
-    av_log(NULL, AV_LOG_INFO, "[START] ffp_start called: paused=%d, render_tid=%p, auto_render=%d\n",
-           ffp->is->paused, ffp->render_tid, ffp->auto_render_enabled);
+    av_log(NULL, AV_LOG_INFO, "[START] ffp_start called: paused=%d, render_tid=%p, auto_render=%d, render_mode=%d\n",
+           ffp->is->paused, ffp->render_tid, ffp->auto_render_enabled, ffp->render_mode);
 
-    /* 启动渲染线程（如果还未启动） */
-    if (ffp->auto_render_enabled && !ffp->render_tid) {
-        av_log(NULL, AV_LOG_INFO, "[START] Starting render thread from ffp_start\n");
-        ffp_start_render_thread(ffp);
+    /* 
+     * 启动渲染线程
+     * - SDL 模式：auto_render_enabled 控制
+     * - 回调模式：总是需要渲染线程来驱动 video_refresh 进行音视频同步
+     */
+    if (!ffp->render_tid) {
+        if (ffp->auto_render_enabled || ffp->render_mode == FFP_RENDER_MODE_CALLBACK) {
+            av_log(NULL, AV_LOG_INFO, "[START] Starting render thread from ffp_start\n");
+            ffp_start_render_thread(ffp);
+        }
     }
 
     /* 如果处于暂停状态，恢复播放 */
@@ -1234,4 +1262,37 @@ int ffp_get_video_rotate_degrees(FFPlayer *ffp)
     /* 当前空实现，后续可以通过读取 displaymatrix side data 来实现 */
     (void)ffp;
     return 0;
+}
+
+/*
+ * =============================================================================
+ * 渲染模式设置
+ * =============================================================================
+ */
+
+void ffp_set_render_mode(FFPlayer *ffp, FFPRenderMode mode)
+{
+    if (!ffp)
+        return;
+    
+    ffp->render_mode = mode;
+    av_log(NULL, AV_LOG_INFO, "[FFPlayer] Render mode set to %s\n",
+           mode == FFP_RENDER_MODE_CALLBACK ? "CALLBACK" : "SDL");
+}
+
+FFPRenderMode ffp_get_render_mode(FFPlayer *ffp)
+{
+    if (!ffp)
+        return FFP_RENDER_MODE_SDL;
+    return ffp->render_mode;
+}
+
+void ffp_set_video_frame_callback(FFPlayer *ffp, ffp_video_frame_callback cb, void *opaque)
+{
+    if (!ffp)
+        return;
+    
+    ffp->video_frame_cb = cb;
+    ffp->video_frame_cb_opaque = opaque;
+    av_log(NULL, AV_LOG_INFO, "[FFPlayer] Video frame callback set: cb=%p, opaque=%p\n", cb, opaque);
 }
