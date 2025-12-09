@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QVBoxLayout>
+#include <QPoint>
 #include <thread>
 #include <atomic>
 
@@ -55,6 +56,13 @@ protected:
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void keyReleaseEvent(QKeyEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
 
 signals:
     // 错误信号
@@ -116,6 +124,14 @@ private:
     
     // 播放标志：如果在准备阶段调用 play()，准备完成后自动播放
     bool m_startOnPrepared;
+    
+    // ========== 画面控制交互状态 ==========
+    bool m_spacePressed;        // 空格键是否按下（用于拖动）
+    bool m_isPanning;           // 是否正在拖动画面
+    QPoint m_lastMousePos;      // 上次鼠标位置
+    
+    // 缩放步进
+    static constexpr float ZOOM_STEP = 0.1f;
 };
 
 #endif // PLAYERWIDGET_H

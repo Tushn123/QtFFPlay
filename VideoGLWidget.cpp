@@ -3,11 +3,13 @@
  * 
  * Qt OpenGL 视频渲染组件实现
  * 使用 GPU Shader 进行 YUV420P 到 RGB 的转换
+ * 支持多种缩放模式、画面缩放和平移
  * 兼容 Qt 5 和 OpenGL ES 2.0+
  */
 
 #include "VideoGLWidget.h"
 #include <QDebug>
+#include <QtMath>
 
 // 避免 C 头文件中的 class 关键字冲突
 #define class class_name
@@ -15,6 +17,11 @@ extern "C" {
 #include "player/ff_ffplayer.h"
 }
 #undef class
+
+// 缩放范围常量
+static const float ZOOM_MIN = 1.0f;
+static const float ZOOM_MAX = 10.0f;
+static const float ZOOM_STEP = 0.1f;  // 每次滚轮缩放步进
 
 // 顶点着色器 - 兼容 OpenGL ES 2.0 / OpenGL 2.1+
 static const char *vertexShaderSource = R"(
@@ -81,6 +88,9 @@ VideoGLWidget::VideoGLWidget(QWidget *parent)
     , m_locTextureY(-1)
     , m_locTextureU(-1)
     , m_locTextureV(-1)
+    , m_scaleMode(ScaleMode::Stretch)
+    , m_zoomFactor(1.0f)
+    , m_panOffset(0, 0)
 {
     memset(m_linesize, 0, sizeof(m_linesize));
     
@@ -229,6 +239,270 @@ void VideoGLWidget::resizeGL(int w, int h)
     glViewport(0, 0, w, h);
 }
 
+// ========== 缩放模式和视图控制 ==========
+
+void VideoGLWidget::setScaleMode(ScaleMode mode)
+{
+    if (m_scaleMode != mode) {
+        m_scaleMode = mode;
+        // 切换模式时重置平移
+        m_panOffset = QPointF(0, 0);
+        emit scaleModeChanged(mode);
+        update();
+    }
+}
+
+void VideoGLWidget::setZoom(float factor)
+{
+    factor = qBound(ZOOM_MIN, factor, ZOOM_MAX);
+    if (!qFuzzyCompare(m_zoomFactor, factor)) {
+        m_zoomFactor = factor;
+        
+        // 如果缩小到 1.0 或更小，重置平移
+        if (m_zoomFactor <= 1.0f) {
+            m_panOffset = QPointF(0, 0);
+        } else {
+            clampPanOffset();
+        }
+        
+        emit zoomChanged(m_zoomFactor);
+        update();
+    }
+}
+
+void VideoGLWidget::resetView()
+{
+    m_zoomFactor = 1.0f;
+    m_panOffset = QPointF(0, 0);
+    emit zoomChanged(m_zoomFactor);
+    update();
+}
+
+void VideoGLWidget::setPan(const QPointF &offset)
+{
+    m_panOffset = offset;
+    clampPanOffset();
+    update();
+}
+
+QPointF VideoGLWidget::maxPan() const
+{
+    if (m_videoSize.isEmpty() || m_zoomFactor <= 1.0f) {
+        return QPointF(0, 0);
+    }
+    
+    int widgetW = width();
+    int widgetH = height();
+    
+    float videoAspect = (float)m_videoSize.width() / m_videoSize.height();
+    float widgetAspect = (float)widgetW / widgetH;
+    
+    float baseW, baseH;
+    
+    switch (m_scaleMode) {
+    case ScaleMode::Stretch:
+        baseW = widgetW;
+        baseH = widgetH;
+        break;
+    case ScaleMode::Fill:
+        if (videoAspect > widgetAspect) {
+            baseH = widgetH;
+            baseW = baseH * videoAspect;
+        } else {
+            baseW = widgetW;
+            baseH = baseW / videoAspect;
+        }
+        break;
+    case ScaleMode::Fit:
+    default:
+        if (videoAspect > widgetAspect) {
+            baseW = widgetW;
+            baseH = baseW / videoAspect;
+        } else {
+            baseH = widgetH;
+            baseW = baseH * videoAspect;
+        }
+        break;
+    }
+    
+    qreal zoomedW = baseW * m_zoomFactor;
+    qreal zoomedH = baseH * m_zoomFactor;
+    
+    qreal maxPanX = qMax(0.0, (zoomedW - widgetW) / 2.0);
+    qreal maxPanY = qMax(0.0, (zoomedH - widgetH) / 2.0);
+    
+    return QPointF(maxPanX, maxPanY);
+}
+
+void VideoGLWidget::zoomAt(float factor, const QPointF &center)
+{
+    factor = qBound(ZOOM_MIN, factor, ZOOM_MAX);
+    if (qFuzzyCompare(m_zoomFactor, factor)) {
+        return;
+    }
+    
+    // 计算当前视口
+    QRectF oldViewport = calculateViewport(width(), height());
+    
+    // 计算鼠标在当前视口中的相对位置 (0~1)
+    float relX = (center.x() - oldViewport.x()) / oldViewport.width();
+    float relY = (center.y() - oldViewport.y()) / oldViewport.height();
+    
+    // 限制相对位置在合理范围内
+    relX = qBound(0.0f, relX, 1.0f);
+    relY = qBound(0.0f, relY, 1.0f);
+    
+    // 计算缩放比例
+    float oldZoom = m_zoomFactor;
+    m_zoomFactor = factor;
+    float zoomRatio = m_zoomFactor / oldZoom;
+    
+    // 计算缩放前后视口尺寸变化
+    float oldW = oldViewport.width();
+    float oldH = oldViewport.height();
+    float newW = oldW * zoomRatio;
+    float newH = oldH * zoomRatio;
+    
+    // 调整平移偏移，使缩放中心点保持不变
+    m_panOffset.setX(m_panOffset.x() - (newW - oldW) * relX + (newW - oldW) / 2.0f);
+    m_panOffset.setY(m_panOffset.y() - (newH - oldH) * relY + (newH - oldH) / 2.0f);
+    
+    // 如果缩小到 1.0 或更小，重置平移
+    if (m_zoomFactor <= 1.0f) {
+        m_panOffset = QPointF(0, 0);
+    } else {
+        clampPanOffset();
+    }
+    
+    emit zoomChanged(m_zoomFactor);
+    update();
+}
+
+void VideoGLWidget::clampPanOffset()
+{
+    if (m_videoSize.isEmpty() || m_zoomFactor <= 1.0f) {
+        m_panOffset = QPointF(0, 0);
+        return;
+    }
+    
+    // 计算基础视口大小
+    int widgetW = width();
+    int widgetH = height();
+    
+    float videoAspect = (float)m_videoSize.width() / m_videoSize.height();
+    float widgetAspect = (float)widgetW / widgetH;
+    
+    float baseW, baseH;
+    
+    switch (m_scaleMode) {
+    case ScaleMode::Stretch:
+        baseW = widgetW;
+        baseH = widgetH;
+        break;
+    case ScaleMode::Fill:
+        if (videoAspect > widgetAspect) {
+            baseH = widgetH;
+            baseW = baseH * videoAspect;
+        } else {
+            baseW = widgetW;
+            baseH = baseW / videoAspect;
+        }
+        break;
+    case ScaleMode::Fit:
+    default:
+        if (videoAspect > widgetAspect) {
+            baseW = widgetW;
+            baseH = baseW / videoAspect;
+        } else {
+            baseH = widgetH;
+            baseW = baseH * videoAspect;
+        }
+        break;
+    }
+    
+    // 缩放后的尺寸
+    qreal zoomedW = baseW * m_zoomFactor;
+    qreal zoomedH = baseH * m_zoomFactor;
+    
+    // 最大平移范围：允许画面移动到边缘与窗口中心对齐
+    qreal maxPanX = qMax(0.0, (zoomedW - widgetW) / 2.0);
+    qreal maxPanY = qMax(0.0, (zoomedH - widgetH) / 2.0);
+    
+    m_panOffset.setX(qBound(-maxPanX, m_panOffset.x(), maxPanX));
+    m_panOffset.setY(qBound(-maxPanY, m_panOffset.y(), maxPanY));
+}
+
+QRectF VideoGLWidget::calculateViewport(int widgetW, int widgetH)
+{
+    if (m_videoSize.isEmpty()) {
+        return QRectF(0, 0, widgetW, widgetH);
+    }
+    
+    float videoAspect = (float)m_videoSize.width() / m_videoSize.height();
+    float widgetAspect = (float)widgetW / widgetH;
+    
+    float baseW, baseH, baseX, baseY;
+    
+    switch (m_scaleMode) {
+    case ScaleMode::Stretch:
+        // 拉伸填充整个窗口
+        baseW = widgetW;
+        baseH = widgetH;
+        baseX = 0;
+        baseY = 0;
+        break;
+        
+    case ScaleMode::Fill:
+        // 保持比例，裁剪填充（无黑边）
+        if (videoAspect > widgetAspect) {
+            // 视频更宽，左右裁剪
+            baseH = widgetH;
+            baseW = baseH * videoAspect;
+        } else {
+            // 视频更高，上下裁剪
+            baseW = widgetW;
+            baseH = baseW / videoAspect;
+        }
+        baseX = (widgetW - baseW) / 2.0f;
+        baseY = (widgetH - baseH) / 2.0f;
+        break;
+        
+    case ScaleMode::Fit:
+    default:
+        // 保持比例，适应窗口（可能有黑边）
+        if (videoAspect > widgetAspect) {
+            // 视频更宽，上下留黑边
+            baseW = widgetW;
+            baseH = baseW / videoAspect;
+        } else {
+            // 视频更高，左右留黑边
+            baseH = widgetH;
+            baseW = baseH * videoAspect;
+        }
+        baseX = (widgetW - baseW) / 2.0f;
+        baseY = (widgetH - baseH) / 2.0f;
+        break;
+    }
+    
+    // 应用缩放
+    float zoomedW = baseW * m_zoomFactor;
+    float zoomedH = baseH * m_zoomFactor;
+    
+    // 缩放中心调整
+    float centerX = widgetW / 2.0f;
+    float centerY = widgetH / 2.0f;
+    
+    // 计算缩放后的位置（以窗口中心为缩放中心）
+    float zoomedX = centerX - zoomedW / 2.0f;
+    float zoomedY = centerY - zoomedH / 2.0f;
+    
+    // 应用平移
+    zoomedX += m_panOffset.x();
+    zoomedY += m_panOffset.y();
+    
+    return QRectF(zoomedX, zoomedY, zoomedW, zoomedH);
+}
+
 void VideoGLWidget::paintGL()
 {
     glClear(GL_COLOR_BUFFER_BIT);
@@ -252,28 +526,19 @@ void VideoGLWidget::paintGL()
         return;
     }
     
-    // 计算保持宽高比的视口
     int widgetW = width();
     int widgetH = height();
-    float videoAspect = (float)m_videoSize.width() / m_videoSize.height();
-    float widgetAspect = (float)widgetW / widgetH;
     
-    int viewportX, viewportY, viewportW, viewportH;
-    if (videoAspect > widgetAspect) {
-        // 视频更宽，上下留黑边
-        viewportW = widgetW;
-        viewportH = (int)(widgetW / videoAspect);
-        viewportX = 0;
-        viewportY = (widgetH - viewportH) / 2;
-    } else {
-        // 视频更高，左右留黑边
-        viewportH = widgetH;
-        viewportW = (int)(widgetH * videoAspect);
-        viewportX = (widgetW - viewportW) / 2;
-        viewportY = 0;
-    }
+    // 计算视口
+    QRectF viewport = calculateViewport(widgetW, widgetH);
     
-    glViewport(viewportX, viewportY, viewportW, viewportH);
+    // 设置裁剪区域（防止绘制到窗口外）
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, widgetW, widgetH);
+    
+    // OpenGL 视口 Y 坐标从底部开始，需要翻转
+    int glY = widgetH - (int)viewport.y() - (int)viewport.height();
+    glViewport((int)viewport.x(), glY, (int)viewport.width(), (int)viewport.height());
     
     // 绑定着色器程序
     m_program->bind();
@@ -315,6 +580,8 @@ void VideoGLWidget::paintGL()
     
     m_program->release();
     
+    glDisable(GL_SCISSOR_TEST);
+    
     // 恢复完整视口
     glViewport(0, 0, widgetW, widgetH);
 }
@@ -341,6 +608,8 @@ void VideoGLWidget::updateTextures()
     
     m_texturesInitialized = true;
 }
+
+// ========== 帧数据更新 ==========
 
 void VideoGLWidget::updateFrame(const FFPVideoFrame *frame)
 {
@@ -438,6 +707,10 @@ void VideoGLWidget::clearFrame()
     m_frameUpdated = false;
     m_texturesInitialized = false;
     locker.unlock();
+    
+    // 重置视图状态
+    m_videoSize = QSize();
+    resetView();
     
     update();
 }

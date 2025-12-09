@@ -9,6 +9,9 @@
 #include "VideoGLWidget.h"
 #include <QKeyEvent>
 #include <QResizeEvent>
+#include <QWheelEvent>
+#include <QMouseEvent>
+#include <QFocusEvent>
 #include <QDebug>
 #include <QPainter>
 #include <QMetaObject>
@@ -32,9 +35,15 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_msgLoopRunning(false)
     , m_lastState(MP_STATE_IDLE)
     , m_startOnPrepared(false)
+    , m_spacePressed(false)
+    , m_isPanning(false)
+    , m_lastMousePos(0, 0)
 {
     // 设置焦点策略以接收键盘事件
     setFocusPolicy(Qt::StrongFocus);
+    
+    // 启用鼠标追踪
+    setMouseTracking(true);
     
     // 设置最小尺寸
     setMinimumSize(320, 240);
@@ -495,6 +504,17 @@ void PlayerWidget::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
     case Qt::Key_Space:
+        // 空格键：按住用于拖动画面，不自动重复时才处理
+        if (!event->isAutoRepeat()) {
+            m_spacePressed = true;
+            // 如果画面已放大，显示抓手光标
+            if (m_videoWidget && m_videoWidget->zoom() > 1.0f) {
+                setCursor(Qt::OpenHandCursor);
+            }
+        }
+        break;
+    case Qt::Key_P:
+        // P 键切换暂停
         togglePause();
         break;
     case Qt::Key_Escape:
@@ -528,8 +548,121 @@ void PlayerWidget::keyPressEvent(QKeyEvent *event)
         // 前进 10 秒
         if (m_mp) mp_seek_relative(m_mp, 10.0);
         break;
+    case Qt::Key_R:
+        // R 键重置视图
+        if (m_videoWidget) {
+            m_videoWidget->resetView();
+        }
+        break;
     default:
         QWidget::keyPressEvent(event);
         break;
     }
+}
+
+void PlayerWidget::keyReleaseEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
+        m_spacePressed = false;
+        m_isPanning = false;
+        setCursor(Qt::ArrowCursor);
+    } else {
+        QWidget::keyReleaseEvent(event);
+    }
+}
+
+void PlayerWidget::wheelEvent(QWheelEvent *event)
+{
+    // Ctrl + 滚轮缩放画面
+    if ((event->modifiers() & Qt::ControlModifier) && m_videoWidget) {
+        QPoint numDegrees = event->angleDelta();
+        if (!numDegrees.isNull()) {
+            float currentZoom = m_videoWidget->zoom();
+            float delta = numDegrees.y() > 0 ? ZOOM_STEP : -ZOOM_STEP;
+            float newZoom = currentZoom + delta * currentZoom;
+            
+            // 获取鼠标位置
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+            QPointF mousePos = event->position();
+#else
+            QPointF mousePos = event->posF();
+#endif
+            // 转换为 VideoGLWidget 的坐标
+            QPointF localPos = m_videoWidget->mapFromParent(mousePos.toPoint());
+            
+            // 以鼠标位置为中心缩放
+            m_videoWidget->zoomAt(newZoom, localPos);
+        }
+        event->accept();
+    } else {
+        QWidget::wheelEvent(event);
+    }
+}
+
+void PlayerWidget::mousePressEvent(QMouseEvent *event)
+{
+    // 空格 + 左键开始拖动画面
+    if (m_spacePressed && event->button() == Qt::LeftButton && m_videoWidget) {
+        if (m_videoWidget->zoom() > 1.0f) {
+            m_isPanning = true;
+            m_lastMousePos = event->pos();
+            setCursor(Qt::ClosedHandCursor);
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void PlayerWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_isPanning && m_videoWidget) {
+        // 计算鼠标移动距离
+        QPoint delta = event->pos() - m_lastMousePos;
+        m_lastMousePos = event->pos();
+        
+        // 更新平移偏移
+        QPointF currentPan = m_videoWidget->pan();
+        m_videoWidget->setPan(currentPan + QPointF(delta));
+        
+        event->accept();
+    } else if (m_spacePressed && m_videoWidget && m_videoWidget->zoom() > 1.0f) {
+        // 空格按下时显示抓手光标
+        setCursor(Qt::OpenHandCursor);
+    }
+}
+
+void PlayerWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_isPanning && event->button() == Qt::LeftButton) {
+        m_isPanning = false;
+        if (m_spacePressed && m_videoWidget && m_videoWidget->zoom() > 1.0f) {
+            setCursor(Qt::OpenHandCursor);
+        } else {
+            setCursor(Qt::ArrowCursor);
+        }
+        event->accept();
+    } else {
+        QWidget::mouseReleaseEvent(event);
+    }
+}
+
+void PlayerWidget::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        // 双击切换暂停/播放
+        togglePause();
+        event->accept();
+    } else {
+        QWidget::mouseDoubleClickEvent(event);
+    }
+}
+
+void PlayerWidget::focusOutEvent(QFocusEvent *event)
+{
+    // 失去焦点时重置交互状态
+    m_spacePressed = false;
+    m_isPanning = false;
+    setCursor(Qt::ArrowCursor);
+    QWidget::focusOutEvent(event);
 }
