@@ -228,6 +228,9 @@ MediaPlayer *mp_create(void)
     /* 初始化消息队列 */
     msg_queue_init(&mp->msg_queue);
     
+    /* 建立 FFPlayer 到 MediaPlayer 消息队列的关联 */
+    mp->ffplayer->ext_msg_queue = &mp->msg_queue;
+    
     /* 初始化状态 */
     mp->mp_state = MP_STATE_IDLE;
     mp->ref_count = 1;
@@ -471,12 +474,10 @@ static int mp_prepare_async_l(MediaPlayer *mp)
     }
     
     /* 
-     * FFPlayer 准备成功，发送 PREPARED 消息
-     * 注意：这是简化实现。在 ijkplayer 中，这个消息是由 FFPlayer 的 read_thread
-     * 在完成流打开后发送的。这里我们在 ffp_prepare_async 成功返回后立即发送。
+     * 注意：不在这里发送 FFP_MSG_PREPARED！
+     * FFP_MSG_PREPARED 应该由 FFPlayer 的 read_thread/stream_open 在真正准备完成后发送
+     * 通过 ffp_notify_msg1(ffp, FFP_MSG_PREPARED) 发送到 ext_msg_queue
      */
-    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] FFPlayer prepared, sending FFP_MSG_PREPARED\n");
-    msg_queue_put_simple1(&mp->msg_queue, FFP_MSG_PREPARED);
     
     return 0;
 }
@@ -1158,32 +1159,29 @@ struct FFPlayer *mp_get_ffplayer(MediaPlayer *mp)
 /*
  * =============================================================================
  * FFPlayer 消息通知函数实现（供 FFPlayer 层调用）
+ * 
+ * 这些函数将消息从 FFPlayer 层发送到 MediaPlayer 层的消息队列
  * =============================================================================
  */
 
-/* 注意：这些函数需要从 FFPlayer 中调用，目前暂时放在这里 */
-/* 后续可以通过回调函数的方式让 FFPlayer 调用 */
-
 void ffp_notify_msg1(FFPlayer *ffp, int what)
 {
-    /* TODO: 需要建立 FFPlayer 到 MediaPlayer 的关联 */
-    /* 目前这个函数是空实现，后续需要完善 */
-    (void)ffp;
-    (void)what;
+    if (!ffp || !ffp->ext_msg_queue)
+        return;
+    msg_queue_put_simple1(ffp->ext_msg_queue, what);
 }
 
 void ffp_notify_msg2(FFPlayer *ffp, int what, int arg1)
 {
-    (void)ffp;
-    (void)what;
-    (void)arg1;
+    if (!ffp || !ffp->ext_msg_queue)
+        return;
+    msg_queue_put_simple2(ffp->ext_msg_queue, what, arg1);
 }
 
 void ffp_notify_msg3(FFPlayer *ffp, int what, int arg1, int arg2)
 {
-    (void)ffp;
-    (void)what;
-    (void)arg1;
-    (void)arg2;
+    if (!ffp || !ffp->ext_msg_queue)
+        return;
+    msg_queue_put_simple3(ffp->ext_msg_queue, what, arg1, arg2);
 }
 

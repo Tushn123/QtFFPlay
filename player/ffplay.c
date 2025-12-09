@@ -25,6 +25,12 @@
 
 #include "ffplay.h"
 #include "ff_vout.h"
+#include "ff_ffmsg.h"
+
+/* 消息通知函数声明（在 mediaplayer.c 中实现）*/
+extern void ffp_notify_msg1(FFPlayer *ffp, int what);
+extern void ffp_notify_msg2(FFPlayer *ffp, int what, int arg1);
+extern void ffp_notify_msg3(FFPlayer *ffp, int what, int arg1, int arg2);
 
 /* 将 AVPixelFormat 映射到 FFVoutPixelFormat */
 static FFVoutPixelFormat av_to_vout_format(enum AVPixelFormat format)
@@ -169,6 +175,7 @@ void set_sdl_yuv_conversion_mode(AVFrame *frame)
 void video_image_display(FFPlayer *ffp, VideoState *is)
 {
     static int image_count = 0;
+    static int first_frame_rendered = 0;  /* 首帧渲染标志 */
     Frame *vp;
     Frame *sp = NULL;
     SDL_Rect rect;
@@ -244,6 +251,13 @@ void video_image_display(FFPlayer *ffp, VideoState *is)
             av_log(NULL, AV_LOG_INFO, "[IMAGE] Texture uploaded #%d\n", upload_count);
         }
         upload_count++;
+        
+        /* 首帧渲染通知 */
+        if (!first_frame_rendered) {
+            first_frame_rendered = 1;
+            ffp_notify_msg1(ffp, FFP_MSG_VIDEO_RENDERING_START);
+            av_log(NULL, AV_LOG_INFO, "[IMAGE] First frame rendered, sent FFP_MSG_VIDEO_RENDERING_START\n");
+        }
     }
 
     /* 转换 SDL_Rect 到 FFVoutRect */
@@ -555,6 +569,9 @@ int video_open(FFPlayer *ffp, VideoState *is)
     is->height = h;
     
     av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Set is->width=%d, is->height=%d, vout=%p\n", w, h, ffp->vout);
+    
+    /* 发送视频尺寸变化消息 */
+    ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, w, h);
     
     /* 确保渲染线程已启动（视频流打开后启动） */
     if (ffp->auto_render_enabled && !ffp->render_tid) {
@@ -2130,6 +2147,9 @@ int read_thread(void *arg)
     }
 
     ret = 0;
+    /* 播放正常结束，发送 COMPLETED 消息 */
+    ffp_notify_msg1(ffp, FFP_MSG_COMPLETED);
+    
  fail:
     if (ic && !is->ic)
         avformat_close_input(&ic);
@@ -2138,6 +2158,9 @@ int read_thread(void *arg)
     if (ret != 0) {
         SDL_Event event;
 
+        /* 发送错误消息 */
+        ffp_notify_msg2(ffp, FFP_MSG_ERROR, ret);
+        
         event.type = FF_QUIT_EVENT;
         event.user.data1 = is;
         SDL_PushEvent(&event);

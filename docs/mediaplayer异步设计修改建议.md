@@ -1,5 +1,23 @@
 # MediaPlayer 异步设计修改建议
 
+> **状态**: ✅ 已完成修改
+
+## 修改完成清单
+
+| 文件 | 修改内容 | 状态 |
+|------|----------|------|
+| `ff_ffplayer.h` | 添加 `ext_msg_queue` 指针 | ✅ |
+| `mediaplayer.c` | `mp_create()` 建立 FFPlayer 到消息队列的关联 | ✅ |
+| `mediaplayer.c` | 实现 `ffp_notify_msg1/2/3()` 函数 | ✅ |
+| `mediaplayer.c` | 移除 `mp_prepare_async_l()` 中立即发送 PREPARED 的代码 | ✅ |
+| `ff_ffplayer.c` | 在 `ffp_prepare_async()` 中发送 `FFP_MSG_PREPARED` | ✅ |
+| `ffplay.c` | 在 `read_thread` 结束时发送 `FFP_MSG_COMPLETED` | ✅ |
+| `ffplay.c` | 在 `read_thread` 失败时发送 `FFP_MSG_ERROR` | ✅ |
+| `ffplay.c` | 在 `video_open()` 中发送 `FFP_MSG_VIDEO_SIZE_CHANGED` | ✅ |
+| `ffplay.c` | 在首帧渲染时发送 `FFP_MSG_VIDEO_RENDERING_START` | ✅ |
+
+---
+
 ## 一、ijkplayer 异步设计分析
 
 ### 1.1 为什么需要异步设计？

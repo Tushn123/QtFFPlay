@@ -775,6 +775,11 @@ void ffp_seek_to_percent(FFPlayer *ffp, double frac)
  * =============================================================================
  */
 
+/* 前向声明消息通知函数（在 mediaplayer.c 中实现）*/
+void ffp_notify_msg1(FFPlayer *ffp, int what);
+void ffp_notify_msg2(FFPlayer *ffp, int what, int arg1);
+void ffp_notify_msg3(FFPlayer *ffp, int what, int arg1, int arg2);
+
 int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
 {
     if (!ffp || !file_name)
@@ -790,10 +795,19 @@ int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
     ffp->is = stream_open(ffp, ffp->input_filename, ffp->iformat);
     if (!ffp->is) {
         av_log(NULL, AV_LOG_ERROR, "ffp_prepare_async: stream_open failed\n");
+        /* 发送错误消息 */
+        ffp_notify_msg2(ffp, FFP_MSG_ERROR, -1);
         return -1;
     }
 
     ffp->prepared = 1;
+    
+    /* 
+     * 发送 FFP_MSG_PREPARED 消息
+     * 注意：这里是简化实现。更准确的做法是在 read_thread 中
+     * 当所有流都打开并准备好后再发送。
+     */
+    ffp_notify_msg1(ffp, FFP_MSG_PREPARED);
     
     /* 注意：渲染线程将在视频流打开后（video_open）自动启动 */
     return 0;
@@ -845,6 +859,9 @@ int ffp_stop(FFPlayer *ffp)
         ffp->is = NULL;
     }
     ffp->prepared = 0;
+    
+    /* 发送停止完成消息（可选，供上层感知状态变化）*/
+    ffp_notify_msg1(ffp, FFP_MSG_PLAYBACK_STATE_CHANGED);
     return 0;
 }
 

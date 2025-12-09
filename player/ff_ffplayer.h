@@ -156,6 +156,10 @@ typedef struct FFPlayer {
     AVDictionary *sws_dict;
     AVDictionary *swr_opts;
 
+    /* 外部消息队列（指向 MediaPlayer 的 msg_queue）*/
+    /* 用于 FFPlayer 层向 MediaPlayer 层发送事件通知 */
+    struct MessageQueue *ext_msg_queue;
+
 } FFPlayer;
 
 /*
