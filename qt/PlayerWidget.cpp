@@ -513,50 +513,50 @@ void PlayerWidget::keyPressEvent(QKeyEvent *event)
             }
         }
         break;
-    case Qt::Key_P:
-        // P 键切换暂停
-        togglePause();
-        break;
-    case Qt::Key_Escape:
-    case Qt::Key_Q:
-        stop();
-        close();
-        break;
-    case Qt::Key_F:
-        if (isFullScreen())
-            showNormal();
-        else
-            showFullScreen();
-        break;
-    case Qt::Key_M:
-        // 切换静音
-        if (m_mp) mp_toggle_mute(m_mp);
-        break;
-    case Qt::Key_Up:
-        // 增大音量
-        if (m_mp) mp_update_volume(m_mp, 1, 10.0);
-        break;
-    case Qt::Key_Down:
-        // 减小音量
-        if (m_mp) mp_update_volume(m_mp, -1, 10.0);
-        break;
-    case Qt::Key_Left:
-        // 后退 10 秒
-        if (m_mp) mp_seek_relative(m_mp, -10.0);
-        break;
-    case Qt::Key_Right:
-        // 前进 10 秒
-        if (m_mp) mp_seek_relative(m_mp, 10.0);
-        break;
-    case Qt::Key_R:
-        // R 键重置视图
-        if (m_videoWidget) {
-            m_videoWidget->resetView();
-        }
-        break;
-    default:
-        QWidget::keyPressEvent(event);
-        break;
+    // case Qt::Key_P:
+    //     // P 键切换暂停
+    //     togglePause();
+    //     break;
+    // case Qt::Key_Escape:
+    // case Qt::Key_Q:
+    //     stop();
+    //     close();
+    //     break;
+    // case Qt::Key_F:
+    //     if (isFullScreen())
+    //         showNormal();
+    //     else
+    //         showFullScreen();
+    //     break;
+    // case Qt::Key_M:
+    //     // 切换静音
+    //     if (m_mp) mp_toggle_mute(m_mp);
+    //     break;
+    // case Qt::Key_Up:
+    //     // 增大音量
+    //     if (m_mp) mp_update_volume(m_mp, 1, 10.0);
+    //     break;
+    // case Qt::Key_Down:
+    //     // 减小音量
+    //     if (m_mp) mp_update_volume(m_mp, -1, 10.0);
+    //     break;
+    // case Qt::Key_Left:
+    //     // 后退 10 秒
+    //     if (m_mp) mp_seek_relative(m_mp, -10.0);
+    //     break;
+    // case Qt::Key_Right:
+    //     // 前进 10 秒
+    //     if (m_mp) mp_seek_relative(m_mp, 10.0);
+    //     break;
+    // case Qt::Key_R:
+    //     // R 键重置视图
+    //     if (m_videoWidget) {
+    //         m_videoWidget->resetView();
+    //     }
+    //     break;
+    // default:
+    //     QWidget::keyPressEvent(event);
+    //     break;
     }
 }
 
@@ -644,17 +644,6 @@ void PlayerWidget::mouseReleaseEvent(QMouseEvent *event)
         event->accept();
     } else {
         QWidget::mouseReleaseEvent(event);
-    }
-}
-
-void PlayerWidget::mouseDoubleClickEvent(QMouseEvent *event)
-{
-    if (event->button() == Qt::LeftButton) {
-        // 双击切换暂停/播放
-        togglePause();
-        event->accept();
-    } else {
-        QWidget::mouseDoubleClickEvent(event);
     }
 }
 

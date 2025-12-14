@@ -91,6 +91,7 @@ VideoGLWidget::VideoGLWidget(QWidget *parent)
     , m_scaleMode(ScaleMode::Stretch)
     , m_zoomFactor(1.0f)
     , m_panOffset(0, 0)
+    , m_pendingFrames(0)
 {
     memset(m_linesize, 0, sizeof(m_linesize));
     
@@ -683,6 +684,9 @@ void VideoGLWidget::updateFrame(const FFPVideoFrame *frame)
     
     m_frameUpdated = true;
     
+    // 增加待渲染帧计数
+    m_pendingFrames.fetchAndAddRelaxed(1);
+    
     // 更新视频尺寸
     if (sizeChanged) {
         m_videoSize = QSize(frame->width, frame->height);
@@ -717,5 +721,21 @@ void VideoGLWidget::clearFrame()
 
 void VideoGLWidget::onFrameReady()
 {
+    // 减少待渲染帧计数
+    m_pendingFrames.fetchAndSubRelaxed(1);
     update();
+}
+
+bool VideoGLWidget::hasPendingFrames() const
+{
+    return m_pendingFrames.loadRelaxed() > 0;
+}
+
+void VideoGLWidget::forceRepaint()
+{
+    // 在模态循环中强制重绘
+    if (m_pendingFrames.loadRelaxed() > 0) {
+        m_pendingFrames.storeRelaxed(0);
+        repaint();
+    }
 }

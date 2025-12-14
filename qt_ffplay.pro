@@ -4,9 +4,15 @@ CONFIG += console
 QT += core gui widgets opengl
 
 SOURCES += \
+    qt/MainWindow.cpp \
+    qt/MultiVideoWidget.cpp \
+    qt/VideoTitleBarWidget.cpp \
+    qt/VideoToolBarWidget.cpp \
+    qt/VideoWidget.cpp \
+    qt/htable.cpp \
     main.cpp \
-    PlayerWidget.cpp \
-    VideoGLWidget.cpp \
+    qt/PlayerWidget.cpp \
+    qt/VideoGLWidget.cpp \
     player/ffplay.c \
     player/ff_ffplayer.c \
     player/ff_vout.c \
@@ -18,8 +24,14 @@ SOURCES += \
     player/mediaplayer.c
 
 HEADERS += \
-    PlayerWidget.h \
-    VideoGLWidget.h \
+    qt/MainWindow.h \
+    qt/MultiVideoWidget.h \
+    qt/PlayerWidget.h \
+    qt/VideoGLWidget.h \
+    qt/VideoTitleBarWidget.h \
+    qt/VideoToolBarWidget.h \
+    qt/VideoWidget.h \
+    qt/htable.h \
     player/ff_define.h \
     player/ff_types.h \
     player/ff_queue.h \
@@ -30,7 +42,8 @@ HEADERS += \
     player/ff_ffplayer.h \
     player/ff_ffmsg.h \
     player/ff_ffmsg_queue.h \
-    player/mediaplayer.h
+    player/mediaplayer.h \
+    qtstyles.h
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/

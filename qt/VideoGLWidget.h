@@ -16,6 +16,7 @@
 #include <QOpenGLVertexArrayObject>
 #include <QMutex>
 #include <QPointF>
+#include <QAtomicInt>
 
 // Forward declaration
 struct FFPVideoFrame;
@@ -108,6 +109,18 @@ public:
      */
     void zoomAt(float factor, const QPointF &center);
 
+    /**
+     * 检查是否有待渲染的帧
+     * @return 是否有待渲染帧
+     */
+    bool hasPendingFrames() const;
+
+    /**
+     * 强制重绘（在模态循环中使用）
+     * 绕过 Qt 事件队列直接调用 repaint
+     */
+    void forceRepaint();
+
 signals:
     /**
      * 视频尺寸变化信号
@@ -192,6 +205,9 @@ private:
     ScaleMode m_scaleMode;      // 当前缩放模式
     float m_zoomFactor;         // 缩放因子 (1.0 ~ 10.0)
     QPointF m_panOffset;        // 平移偏移（像素）
+
+    // ========== 帧计数（用于模态循环中强制刷新） ==========
+    QAtomicInt m_pendingFrames;  // 待渲染帧数
 };
 
 #endif // VIDEOGLWIDGET_H
