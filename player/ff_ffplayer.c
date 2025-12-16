@@ -312,16 +312,16 @@ int ffp_create_window(FFPlayer *ffp)
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
     int flags = SDL_WINDOW_OPENGL;
-    
+
     if (ffp->native_window) {
         /*
          * 嵌入子窗口模式：创建独立的 SDL 窗口，然后嵌入到外部窗口中
          * 不使用 SDL_CreateWindowFrom，因为它在某些平台上无法正确创建 OpenGL 上下文
          */
         flags |= SDL_WINDOW_BORDERLESS;
-        ffp->window = SDL_CreateWindow("", 
-            SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-            ffp->default_width, ffp->default_height, flags);
+            ffp->window = SDL_CreateWindow("", 
+                SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                ffp->default_width, ffp->default_height, flags);
         ffp->use_external_window = 0;  /* 使用子窗口模式 */
     } else {
         /* 独立窗口模式 */
@@ -454,7 +454,7 @@ double ffp_render_frame(FFPlayer *ffp)
                     SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, parent_w, parent_h,
                                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
                     SDL_SetWindowSize(ffp->window, parent_w, parent_h);
-
+                    
                     if (ffp->vout) {
                         vout_set_size(ffp->vout, parent_w, parent_h);
                     }
@@ -601,28 +601,28 @@ int ffp_attach_window(FFPlayer *ffp, void *parent_handle, int width, int height)
         return -1;
     
     /* 4. 嵌入子窗口到父窗口中 */
-    SDL_Window *sdl_win = ffp_get_sdl_window(ffp);
+        SDL_Window *sdl_win = ffp_get_sdl_window(ffp);
 #ifdef _WIN32
-    SDL_SysWMinfo wmInfo;
-    SDL_VERSION(&wmInfo.version);
-    if (SDL_GetWindowWMInfo(sdl_win, &wmInfo)) {
-        HWND sdl_hwnd = wmInfo.info.win.window;
-        HWND parent_hwnd = (HWND)parent_handle;
-        
-        SetParent(sdl_hwnd, parent_hwnd);
-        
-        LONG_PTR style = GetWindowLongPtr(sdl_hwnd, GWL_STYLE);
-        style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
-        style |= (WS_CHILD | WS_VISIBLE);
-        SetWindowLongPtr(sdl_hwnd, GWL_STYLE, style);
-        
-        SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, width, height, 
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        
+        SDL_SysWMinfo wmInfo;
+        SDL_VERSION(&wmInfo.version);
+        if (SDL_GetWindowWMInfo(sdl_win, &wmInfo)) {
+            HWND sdl_hwnd = wmInfo.info.win.window;
+            HWND parent_hwnd = (HWND)parent_handle;
+            
+            SetParent(sdl_hwnd, parent_hwnd);
+            
+            LONG_PTR style = GetWindowLongPtr(sdl_hwnd, GWL_STYLE);
+            style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
+            style |= (WS_CHILD | WS_VISIBLE);
+            SetWindowLongPtr(sdl_hwnd, GWL_STYLE, style);
+            
+            SetWindowPos(sdl_hwnd, HWND_TOP, 0, 0, width, height, 
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            
         av_log(NULL, AV_LOG_INFO, "Child window embedded successfully\n");
-    }
+        }
 #endif
-    SDL_ShowWindow(sdl_win);
+        SDL_ShowWindow(sdl_win);
     
     /* 5. 初始化窗口大小 */
     ffp->screen_width = width;
@@ -852,8 +852,8 @@ int ffp_start(FFPlayer *ffp)
      */
     if (!ffp->render_tid) {
         if (ffp->auto_render_enabled || ffp->render_mode == FFP_RENDER_MODE_CALLBACK) {
-            av_log(NULL, AV_LOG_INFO, "[START] Starting render thread from ffp_start\n");
-            ffp_start_render_thread(ffp);
+        av_log(NULL, AV_LOG_INFO, "[START] Starting render thread from ffp_start\n");
+        ffp_start_render_thread(ffp);
         }
     }
 

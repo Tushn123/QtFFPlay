@@ -1,5 +1,6 @@
 #include "VideoWidget.h"
 #include <QDebug>
+#include <QAbstractItemView>
 
 VideoWidget::VideoWidget(QWidget *parent)
     : QWidget{parent}
@@ -44,6 +45,27 @@ void VideoWidget::initUi()
     videoTitleBarWidget->raise();
     videoToolBarWidget->raise();
 
+    // ============ 连接播放器和工具栏信号 ============
+    
+    // 播放时长变化 -> 更新工具栏
+    connect(playerWidget, &PlayerWidget::durationChanged, 
+            videoToolBarWidget, &VideoToolBarWidget::setDuration);
+    
+    // 播放位置变化 -> 更新工具栏
+    connect(playerWidget, &PlayerWidget::positionChanged,
+            videoToolBarWidget, &VideoToolBarWidget::setCurrentTime);
+    
+    // 工具栏播放/暂停按钮 -> 控制播放器
+    connect(videoToolBarWidget, &VideoToolBarWidget::playPauseClicked,
+            playerWidget, &PlayerWidget::togglePause);
+    
+    // 工具栏进度条拖动/点击 -> 播放器 seek
+    connect(videoToolBarWidget, &VideoToolBarWidget::seekRequested,
+            this, [this](qint64 position) {
+        qDebug() << "[VideoWidget] Seek requested to:" << position << "ms";
+        playerWidget->seekTo(static_cast<long>(position));
+    });
+
     // 设置默认媒体文件
     QString mediaPath = "C:/shn/media/animal.mp4";
     playerWidget->setMedia(mediaPath);
@@ -61,6 +83,26 @@ void VideoWidget::enterEvent(QEvent* event) {
 
 void VideoWidget::leaveEvent(QEvent* event) {
     QWidget::leaveEvent(event);
+    
+    // 检查是否有弹出控件正在显示
+    // 如果有，则不隐藏工具栏（避免闪动）
+    if (videoToolBarWidget) {
+        // 检查 speedCombo 和 resolutionCombo 的下拉框状态
+        QComboBox *speedCombo = videoToolBarWidget->speedCombo;
+        QComboBox *resolutionCombo = videoToolBarWidget->resolutionCombo;
+        
+        // 如果任一 combo box 正在显示下拉列表，则不隐藏工具栏
+        if ((speedCombo && speedCombo->view() && speedCombo->view()->isVisible()) ||
+            (resolutionCombo && resolutionCombo->view() && resolutionCombo->view()->isVisible())) {
+            return;
+        }
+        
+        // 检查音量弹出框是否显示
+        if (videoToolBarWidget->volumePopup && videoToolBarWidget->volumePopup->isVisible()) {
+            return;
+        }
+    }
+    
     videoTitleBarWidget->hide();
     videoToolBarWidget->hide();
 }

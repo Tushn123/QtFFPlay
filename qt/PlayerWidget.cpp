@@ -35,6 +35,8 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_msgLoopRunning(false)
     , m_lastState(MP_STATE_IDLE)
     , m_startOnPrepared(false)
+    , m_positionTimer(nullptr)
+    , m_lastPosition(0)
     , m_spacePressed(false)
     , m_isPanning(false)
     , m_lastMousePos(0, 0)
@@ -57,9 +59,34 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     // 设置布局
     setupLayout();
     
+    // 创建播放位置更新定时器（每 200ms 更新一次）
+    m_positionTimer = new QTimer(this);
+    m_positionTimer->setInterval(200);
+    connect(m_positionTimer, &QTimer::timeout, this, &PlayerWidget::updatePosition);
+    
     // 连接消息处理信号槽（使用 QueuedConnection 跨线程）
     connect(this, &PlayerWidget::stateChanged, this, [this](int state) {
         qDebug() << "[PlayerWidget] State changed to:" << state;
+        
+        // 根据状态控制位置更新定时器
+        if (state == MP_STATE_STARTED) {
+            // 播放状态，确保定时器运行
+            if (m_positionTimer && !m_positionTimer->isActive()) {
+                m_positionTimer->start();
+            }
+        } else if (state == MP_STATE_PAUSED) {
+            // 暂停状态，保持定时器运行以便 seek 时能更新位置
+            // 但更新一次当前位置
+            updatePosition();
+        } else if (state == MP_STATE_COMPLETED || 
+                   state == MP_STATE_STOPPED || state == MP_STATE_ERROR ||
+                   state == MP_STATE_END) {
+            // 停止/完成/错误时，停止定时器
+            if (m_positionTimer) {
+                m_positionTimer->stop();
+            }
+            updatePosition();
+        }
     });
 }
 
@@ -147,6 +174,11 @@ void PlayerWidget::videoFrameCallback(void *opaque, FFPVideoFrame *frame)
 void PlayerWidget::cleanupPlayer()
 {
     qDebug() << "[PlayerWidget] cleanupPlayer called";
+    
+    // 停止位置更新定时器
+    if (m_positionTimer) {
+        m_positionTimer->stop();
+    }
     
     // 停止消息循环线程
     stopMessageLoop();
@@ -245,6 +277,11 @@ void PlayerWidget::play()
     // 其他状态，直接调用 mp_start
     int ret = mp_start(m_mp);
     qDebug() << "mp_start returned:" << ret << ", state:" << state;
+    
+    // 确保定时器启动
+    if (ret >= 0 && m_positionTimer && !m_positionTimer->isActive()) {
+        m_positionTimer->start();
+    }
 }
 
 void PlayerWidget::pause()
@@ -273,6 +310,62 @@ void PlayerWidget::togglePause()
         } else if (state == MP_STATE_STARTED) {
             pause();
         }
+    }
+}
+
+void PlayerWidget::seekTo(long msec)
+{
+    if (!m_mp) {
+        return;
+    }
+    
+    // 确保位置在有效范围内
+    long duration = mp_get_duration(m_mp);
+    if (duration > 0) {
+        msec = qBound(0L, msec, duration);
+    }
+    
+    qDebug() << "[PlayerWidget] Seeking to:" << msec << "ms";
+    
+    // 重置上次位置，确保 seek 后会发送位置更新
+    m_lastPosition = -1;
+    
+    int ret = mp_seek_to(m_mp, msec);
+    if (ret < 0) {
+        qWarning() << "[PlayerWidget] Seek failed:" << ret;
+    } else {
+        // seek 成功后，确保定时器正在运行（如果是播放/暂停状态）
+        int state = mp_get_state(m_mp);
+        if ((state == MP_STATE_STARTED || state == MP_STATE_PAUSED) && 
+            m_positionTimer && !m_positionTimer->isActive()) {
+            m_positionTimer->start();
+        }
+        // 立即更新一次位置
+        QTimer::singleShot(50, this, &PlayerWidget::updatePosition);
+    }
+}
+
+void PlayerWidget::updatePosition()
+{
+    if (!m_mp) {
+        return;
+    }
+    
+    int state = mp_get_state(m_mp);
+    
+    // 非播放/暂停状态时不更新（但不阻止定时器）
+    if (state != MP_STATE_STARTED && state != MP_STATE_PAUSED) {
+        // 如果在播放状态下突然变成其他状态，保持定时器运行一段时间
+        // 以便状态恢复后能继续更新
+        return;
+    }
+    
+    long position = mp_get_current_position(m_mp);
+    
+    // 位置变化或者强制更新（m_lastPosition == -1）时发送信号
+    if (position != m_lastPosition || m_lastPosition < 0) {
+        m_lastPosition = position;
+        emit positionChanged(position);
     }
 }
 

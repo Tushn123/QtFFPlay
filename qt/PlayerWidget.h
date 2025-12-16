@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QPoint>
+#include <QTimer>
 #include <thread>
 #include <atomic>
 
@@ -40,6 +41,12 @@ public:
     void pause();
     void stop();
     void togglePause();
+    
+    /**
+     * 跳转到指定位置
+     * @param msec 目标位置（毫秒）
+     */
+    void seekTo(long msec);
     
     bool isPlaying() const;
     bool isPaused() const;
@@ -90,6 +97,9 @@ signals:
 private slots:
     // 消息处理槽（通过 Qt::QueuedConnection 从消息线程调用）
     void onMessage(int what, int arg1, int arg2);
+    
+    // 定时更新播放位置
+    void updatePosition();
 
 private:
     void initPlayer();
@@ -123,6 +133,10 @@ private:
     
     // 播放标志：如果在准备阶段调用 play()，准备完成后自动播放
     bool m_startOnPrepared;
+    
+    // 播放位置更新定时器
+    QTimer *m_positionTimer;
+    long m_lastPosition;
     
     // ========== 画面控制交互状态 ==========
     bool m_spacePressed;        // 空格键是否按下（用于拖动）

@@ -562,25 +562,25 @@ int video_open(FFPlayer *ffp, VideoState *is)
 
     /* SDL 模式：窗口操作 */
     if (ffp->window) {
-        /* 对于从原生窗口创建的 SDL 窗口，不要修改窗口属性 */
-        if (!ffp->native_window) {
-            if (!ffp->window_title)
-                ffp->window_title = ffp->input_filename;
-            SDL_SetWindowTitle(ffp->window, ffp->window_title);
+    /* 对于从原生窗口创建的 SDL 窗口，不要修改窗口属性 */
+    if (!ffp->native_window) {
+    if (!ffp->window_title)
+        ffp->window_title = ffp->input_filename;
+    SDL_SetWindowTitle(ffp->window, ffp->window_title);
 
-            SDL_SetWindowSize(ffp->window, w, h);
-            SDL_SetWindowPosition(ffp->window, ffp->screen_left, ffp->screen_top);
-            if (ffp->is_full_screen)
-                SDL_SetWindowFullscreen(ffp->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-            SDL_ShowWindow(ffp->window);
-        } else {
-            /* 对于嵌入式窗口，使用实际窗口大小 */
-            SDL_GetWindowSize(ffp->window, &w, &h);
-        }
+    SDL_SetWindowSize(ffp->window, w, h);
+    SDL_SetWindowPosition(ffp->window, ffp->screen_left, ffp->screen_top);
+    if (ffp->is_full_screen)
+        SDL_SetWindowFullscreen(ffp->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    SDL_ShowWindow(ffp->window);
+    } else {
+        /* 对于嵌入式窗口，使用实际窗口大小 */
+        SDL_GetWindowSize(ffp->window, &w, &h);
+    }
 
-        /* 更新 OpenGL 视口大小 */
+    /* 更新 OpenGL 视口大小 */
         if (ffp->vout) {
-            vout_set_size(ffp->vout, w, h);
+    vout_set_size(ffp->vout, w, h);
         }
     }
 
@@ -2212,7 +2212,7 @@ int read_thread(void *arg)
 
         /* 发送错误消息 */
         ffp_notify_msg2(ffp, FFP_MSG_ERROR, ret);
-        
+
         event.type = FF_QUIT_EVENT;
         event.user.data1 = is;
         SDL_PushEvent(&event);

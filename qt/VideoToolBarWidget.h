@@ -6,6 +6,85 @@
 #include <QPushButton>
 #include <QSlider>
 #include <QWidget>
+#include <QVBoxLayout>
+#include <QFrame>
+
+/**
+ * 进度条时间提示浮窗
+ */
+class ProgressTooltip : public QFrame
+{
+    Q_OBJECT
+public:
+    explicit ProgressTooltip(QWidget *parent = nullptr);
+    
+    void setTime(qint64 milliseconds);
+    void showAt(const QPoint &globalPos);
+    
+private:
+    QLabel *m_timeLabel;
+};
+
+/**
+ * 自定义视频进度条
+ * - 支持点击跳转
+ * - 支持悬浮时间提示
+ */
+class VideoProgressSlider : public QSlider
+{
+    Q_OBJECT
+public:
+    explicit VideoProgressSlider(QWidget *parent = nullptr);
+    ~VideoProgressSlider();
+    
+    void setDuration(qint64 milliseconds);
+    qint64 duration() const { return m_duration; }
+    
+signals:
+    // 点击或拖动请求跳转到指定位置
+    void seekRequested(qint64 position);
+    
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void enterEvent(QEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    
+private:
+    qint64 positionFromMouse(int x) const;
+    int valueFromPosition(int x) const;
+    void updateTooltip(int x);
+    
+    ProgressTooltip *m_tooltip;
+    qint64 m_duration;
+    bool m_isDragging;
+};
+
+/**
+ * 音量弹出控件 - 垂直音量滑块
+ */
+class VolumePopup : public QFrame
+{
+    Q_OBJECT
+public:
+    explicit VolumePopup(QWidget *parent = nullptr);
+    
+    void setVolume(int volume);
+    int volume() const;
+    
+signals:
+    void volumeChanged(int volume);
+    
+protected:
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    
+private:
+    QSlider *m_slider;
+    QLabel *m_label;
+};
 
 class VideoToolBarWidget : public QWidget
 {
@@ -34,6 +113,12 @@ public:
     void setResolution(const QString &resolution);
     QString currentResolution() const;
 
+    // 设置音量
+    void setVolume(int volume);
+    int currentVolume() const;
+    void setMuted(bool muted);
+    bool isMuted() const;
+
     void updateTimeDisplay();
 
 protected:
@@ -52,12 +137,17 @@ signals:
     void progressChanged(int value); // 进度条值改变
     void progressPressed();          // 进度条按下
     void progressReleased();         // 进度条释放
+    void seekRequested(qint64 position); // 请求跳转到指定位置（毫秒）
 
     // 倍速信号
     void speedChanged(float speed);  // 倍速改变
 
     // 分辨率信号
     void resolutionChanged(const QString &resolution); // 分辨率改变
+
+    // 音量信号
+    void volumeChanged(int volume);    // 音量改变
+    void mutedChanged(bool muted);     // 静音状态改变
 
 private slots:
     void onPlayPauseClicked();
@@ -66,11 +156,13 @@ private slots:
     void onProgressSliderChanged(int value);
     void onProgressSliderPressed();
     void onProgressSliderReleased();
+    void onVolumeButtonClicked();
+    void onVolumePopupChanged(int volume);
 
 public:
     // 上方区域控件
     QLabel *timeLabel;
-    QSlider *progressSlider;
+    VideoProgressSlider *progressSlider;
 
     // 下方区域左侧控件
     QPushButton *stepBackwardButton;
@@ -80,6 +172,8 @@ public:
     QPushButton *stepForwardButton;
 
     // 下方区域右侧控件
+    QPushButton *volumeButton;
+    VolumePopup *volumePopup;
     QComboBox *speedCombo;
     QComboBox *resolutionCombo;
 
@@ -87,6 +181,8 @@ public:
     bool isPlaying_;
     qint64 currentTime_;
     qint64 duration_;
+    int volume_;
+    bool muted_;
 };
 
 #endif // VIDEOTOOLBARWIDGET_H
