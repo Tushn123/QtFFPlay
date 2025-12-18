@@ -822,6 +822,37 @@ int mp_is_muted(MediaPlayer *mp)
 
 /*
  * =============================================================================
+ * 播放速率控制
+ * =============================================================================
+ */
+
+int mp_set_playback_rate(MediaPlayer *mp, float rate)
+{
+    if (!mp || !mp->ffplayer)
+        return -1;
+    
+    pthread_mutex_lock(&mp->mutex);
+    ffp_set_playback_rate(mp->ffplayer, rate);
+    pthread_mutex_unlock(&mp->mutex);
+    
+    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Playback rate set to: %.2f\n", rate);
+    return 0;
+}
+
+float mp_get_playback_rate(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return 1.0f;
+    
+    pthread_mutex_lock(&mp->mutex);
+    float rate = mp->ffplayer->playback_rate;
+    pthread_mutex_unlock(&mp->mutex);
+    
+    return rate;
+}
+
+/*
+ * =============================================================================
  * 循环控制
  * =============================================================================
  */

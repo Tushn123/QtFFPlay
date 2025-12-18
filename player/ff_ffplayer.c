@@ -24,6 +24,7 @@
 #include "ffplay.h"
 #include "cmdutils.h"
 #include <SDL_syswm.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -172,6 +173,7 @@ void ffp_set_defaults(FFPlayer *ffp)
 
     /* 播放速率 */
     ffp->playback_rate = 1.0f;
+    ffp->playback_rate_changed = 0;
 
     /* 选项字典 */
     ffp->format_opts = NULL;
@@ -414,20 +416,10 @@ void ffp_shutdown(FFPlayer *ffp)
 
 double ffp_render_frame(FFPlayer *ffp)
 {
-    static int call_count = 0;
     double remaining_time = REFRESH_RATE;  /* 默认刷新间隔 */
     
     if (!ffp || !ffp->is) {
-        if (call_count < 5) {
-            av_log(NULL, AV_LOG_WARNING, "[RENDER] ffp_render_frame skip: ffp=%p, is=%p\n",
-                   ffp, ffp ? ffp->is : NULL);
-        }
-        call_count++;
         return remaining_time;
-    }
-
-    if (call_count < 10 || call_count % 60 == 0) {
-        av_log(NULL, AV_LOG_INFO, "[RENDER] ffp_render_frame call #%d, window=%p\n", call_count, ffp->window);
     }
 
     /* 检查窗口大小变化 */
@@ -485,7 +477,6 @@ double ffp_render_frame(FFPlayer *ffp)
 
     remaining_time = 0.0;
     video_refresh(ffp, ffp->is, &remaining_time);
-    call_count++;
     
     return remaining_time;
 }
@@ -501,17 +492,7 @@ static int render_thread_func(void *arg)
     double remaining_time = 0.0;
     
     while (ffp->render_thread_running) {
-        if (loop_count < 10 || loop_count % 60 == 0) {
-            av_log(NULL, AV_LOG_INFO, "[RENDER] Loop %d: running=%d, is=%p, abort=%d\n", 
-                   loop_count, ffp->render_thread_running, ffp->is, ffp->is ? ffp->is->abort_request : -1);
-        }
-        
         if (ffp->is && !ffp->is->abort_request) {
-            if (loop_count < 10 || loop_count % 60 == 0) {
-                av_log(NULL, AV_LOG_INFO, "[RENDER] Loop %d: paused=%d, force_refresh=%d, show_mode=%d, width=%d\n",
-                       loop_count, ffp->is->paused, ffp->is->force_refresh, ffp->is->show_mode, ffp->is->width);
-            }
-            
             /* 确保有刷新请求 */
             if (!ffp->is->paused || ffp->is->force_refresh) {
                 remaining_time = ffp_render_frame(ffp);
@@ -521,10 +502,6 @@ static int render_thread_func(void *arg)
                 remaining_time = REFRESH_RATE;
             }
         } else {
-            if (loop_count < 10) {
-                av_log(NULL, AV_LOG_WARNING, "[RENDER] Loop %d: Skipping render, is=%p, abort=%d\n",
-                       loop_count, ffp->is, ffp->is ? ffp->is->abort_request : -1);
-            }
             remaining_time = REFRESH_RATE;
         }
         
@@ -1248,13 +1225,19 @@ void ffp_set_playback_rate(FFPlayer *ffp, float rate)
     if (!ffp)
         return;
 
-    /* 保存播放速率值，但 ffplay 目前不支持变速播放 */
-    /* 后续可以通过 atempo 音频滤镜和调整视频帧率来实现 */
-    ffp->playback_rate = rate;
+    /* 限制范围 0.5 ~ 2.0 */
+    if (rate < 0.5f) rate = 0.5f;
+    if (rate > 2.0f) rate = 2.0f;
 
-    av_log(NULL, AV_LOG_WARNING,
-           "ffp_set_playback_rate: playback rate %.2f is set but not implemented yet\n",
-           rate);
+    /* 如果速率相同，不做处理 */
+    if (fabsf(ffp->playback_rate - rate) < 0.001f)
+        return;
+
+    av_log(NULL, AV_LOG_INFO, "[FFPlayer] Playback rate: %.2f -> %.2f\n", 
+           ffp->playback_rate, rate);
+    
+    ffp->playback_rate = rate;
+    ffp->playback_rate_changed = 1;
 }
 
 int ffp_get_video_rotate_degrees(FFPlayer *ffp)

@@ -65,6 +65,20 @@ void VideoWidget::initUi()
         qDebug() << "[VideoWidget] Seek requested to:" << position << "ms";
         playerWidget->seekTo(static_cast<long>(position));
     });
+    
+    // 工具栏倍速选择 -> 播放器倍速设置
+    connect(videoToolBarWidget, &VideoToolBarWidget::speedChanged,
+            this, [this](float speed) {
+        qDebug() << "[VideoWidget] Speed changed to:" << speed;
+        playerWidget->setPlaybackRate(speed);
+    });
+    
+    // 工具栏音量调整 -> 播放器音量设置
+    connect(videoToolBarWidget, &VideoToolBarWidget::volumeChanged,
+            this, [this](int volume) {
+        qDebug() << "[VideoWidget] Volume changed to:" << volume;
+        playerWidget->setVolume(volume);
+    });
 
     // 设置默认媒体文件
     QString mediaPath = "C:/shn/media/animal.mp4";

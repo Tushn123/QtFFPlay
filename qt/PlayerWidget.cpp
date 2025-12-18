@@ -409,6 +409,40 @@ long PlayerWidget::getDuration() const
     return 0;
 }
 
+void PlayerWidget::setPlaybackRate(float rate)
+{
+    if (m_mp) {
+        mp_set_playback_rate(m_mp, rate);
+        qDebug() << "[PlayerWidget] Playback rate set to:" << rate;
+    }
+}
+
+float PlayerWidget::playbackRate() const
+{
+    if (m_mp) {
+        return mp_get_playback_rate(m_mp);
+    }
+    return 1.0f;
+}
+
+void PlayerWidget::setVolume(int volume)
+{
+    if (m_mp) {
+        // 转换 0-100 到 0.0-1.0
+        float vol = qBound(0, volume, 100) / 100.0f;
+        mp_set_volume(m_mp, vol);
+        qDebug() << "[PlayerWidget] Volume set to:" << volume << "(" << vol << ")";
+    }
+}
+
+int PlayerWidget::volume() const
+{
+    if (m_mp) {
+        return (int)(mp_get_volume(m_mp) * 100);
+    }
+    return 100;
+}
+
 /*
  * =============================================================================
  * 消息循环线程实现 - 参考 ijkplayer 的 message_loop_n

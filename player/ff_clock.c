@@ -123,10 +123,12 @@ void check_external_clock_speed(VideoState *is) {
 }
 
 // 根据音视频同步状态，调整视频帧的显示延迟，使视频跟上或等待主时钟
-double compute_target_delay(double delay, VideoState *is)
+// playback_rate: 播放速率，1.0 为正常速度，>1.0 为快放，<1.0 为慢放
+double compute_target_delay(double delay, VideoState *is, float playback_rate)
 {
     double sync_threshold, diff = 0;
-
+    double original_delay = delay;
+    
     /* update delay to follow master synchronisation source */
     // 如果视频不是主时钟
     if (get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER) {
@@ -134,13 +136,15 @@ double compute_target_delay(double delay, VideoState *is)
            duplicating or deleting a frame */
         // 计算视频时钟与主时钟的差值
         // diff > 0: 视频快了（超前）, diff < 0: 视频慢了（滞后）
-        diff = get_clock(&is->vidclk) - get_master_clock(is);
+        double vidclk = get_clock(&is->vidclk);
+        double audclk = get_master_clock(is);
+        diff = vidclk - audclk;
 
         /* skip or repeat frame. We take into account the
            delay to compute the threshold. I still don't know
            if it is the best guess */
-        // 计算同步阈值
         sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
+        
         // 如果差值在同步阈值范围内
         if (!isnan(diff) && fabs(diff) < is->max_frame_duration) {
             // 根据diff调整delay
@@ -154,10 +158,28 @@ double compute_target_delay(double delay, VideoState *is)
             else if (diff >= sync_threshold)
                 delay = 2 * delay;
         }
+        
+        // 日志：每300帧打印一次详细信息（倍速模式下）
+        static int log_counter = 0;
+        if (fabsf(playback_rate - 1.0f) > 0.001f && ++log_counter >= 300) {
+            log_counter = 0;
+            av_log(NULL, AV_LOG_INFO, 
+                   "[SYNC] rate=%.2f vidclk=%.3f audclk=%.3f diff=%.4f "
+                   "threshold=%.4f orig_delay=%.4f sync_delay=%.4f\n",
+                   playback_rate, vidclk, audclk, diff, 
+                   sync_threshold, original_delay, delay);
+        }
     }
 
-    av_log(NULL, AV_LOG_TRACE, "video: delay=%0.3f A-V=%f\n",
-            delay, -diff);
+    /*
+     * 倍速播放时调整最终的 delay：
+     * - atempo 滤镜使音频以 N 倍速播放，音频时钟（PTS）推进速度变成 N 倍
+     * - 视频帧间隔也需要除以 N 才能保持同步
+     * 注意：这个调整要在同步计算之后进行，因为 diff 是基于原始 PTS 计算的
+     */
+    if (playback_rate > 0.001f && fabsf(playback_rate - 1.0f) > 0.001f) {
+        delay = delay / playback_rate;
+    }
 
     return delay;
 }

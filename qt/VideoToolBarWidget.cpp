@@ -579,8 +579,8 @@ void VideoToolBarWidget::initUI()
         }
     )");
 
-    // 添加倍速选项
-    QStringList speedOptions = {"0.5x", "0.75x", "1.0x", "1.5x", "2.0x", "3.0x"};
+    // 添加倍速选项 (0.5 ~ 2.0)
+    QStringList speedOptions = {"0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "1.75x", "2.0x"};
     for (const QString &option : speedOptions) {
         speedCombo->addItem(option);
     }
@@ -752,8 +752,8 @@ bool VideoToolBarWidget::isPlaying() const
 
 void VideoToolBarWidget::setSpeed(float speed)
 {
-    // 查找最近的倍速选项
-    QStringList speedTexts = {"0.5", "0.75", "1.0", "1.5", "2.0", "3.0"};
+    // 查找最近的倍速选项 (0.5 ~ 2.0)
+    QStringList speedTexts = {"0.5", "0.75", "1.0", "1.25", "1.5", "1.75", "2.0"};
     QString speedStr = QString::number(speed, 'f', 2);
 
     // 去掉末尾的0和小数点

@@ -55,6 +55,14 @@ public:
     int getState() const;
     long getCurrentPosition() const;
     long getDuration() const;
+    
+    // 播放速率
+    void setPlaybackRate(float rate);
+    float playbackRate() const;
+    
+    // 音量控制
+    void setVolume(int volume);  // 0-100
+    int volume() const;
 
     // 获取 OpenGL 渲染组件
     VideoGLWidget* videoWidget() const { return m_videoWidget; }

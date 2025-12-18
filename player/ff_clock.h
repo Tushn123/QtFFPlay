@@ -22,7 +22,7 @@ double get_master_clock(VideoState *is);
 void check_external_clock_speed(VideoState *is);
 
 /* Video sync functions */
-double compute_target_delay(double delay, VideoState *is);
+double compute_target_delay(double delay, VideoState *is, float playback_rate);
 double vp_duration(VideoState *is, Frame *vp, Frame *nextvp);
 void update_video_pts(VideoState *is, double pts, int64_t pos, int serial);
 

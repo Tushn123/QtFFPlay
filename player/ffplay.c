@@ -174,7 +174,6 @@ void set_sdl_yuv_conversion_mode(AVFrame *frame)
 
 void video_image_display(FFPlayer *ffp, VideoState *is)
 {
-    static int image_count = 0;
     static int first_frame_rendered = 0;  /* 首帧渲染标志 */
     Frame *vp;
     Frame *sp = NULL;
@@ -182,12 +181,6 @@ void video_image_display(FFPlayer *ffp, VideoState *is)
     FFVoutRect dst_rect;
 
     vp = frame_queue_peek_last(&is->pictq);
-    
-    if (image_count < 10 || image_count % 60 == 0) {
-        av_log(NULL, AV_LOG_INFO, "[IMAGE] #%d: vp=%p, uploaded=%d, width=%d, height=%d\n",
-               image_count, vp, vp ? vp->uploaded : -1, vp ? vp->width : 0, vp ? vp->height : 0);
-    }
-    image_count++;
     
     /* 处理字幕 */
     if (is->subtitle_st) {
@@ -240,23 +233,18 @@ void video_image_display(FFPlayer *ffp, VideoState *is)
     calculate_display_rect(&rect, is->xleft, is->ytop, is->width, is->height, vp->width, vp->height, vp->sar);
 
     if (!vp->uploaded) {
-        static int upload_count = 0;
         if (upload_texture(ffp, &is->vid_texture, vp->frame, &is->img_convert_ctx) < 0) {
-            av_log(NULL, AV_LOG_ERROR, "[IMAGE] upload_texture failed (count=%d)\n", upload_count);
+            av_log(NULL, AV_LOG_ERROR, "[IMAGE] upload_texture failed\n");
             return;
         }
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
-        if (upload_count < 10) {
-            av_log(NULL, AV_LOG_INFO, "[IMAGE] Texture uploaded #%d\n", upload_count);
-        }
-        upload_count++;
         
         /* 首帧渲染通知 */
         if (!first_frame_rendered) {
             first_frame_rendered = 1;
             ffp_notify_msg1(ffp, FFP_MSG_VIDEO_RENDERING_START);
-            av_log(NULL, AV_LOG_INFO, "[IMAGE] First frame rendered, sent FFP_MSG_VIDEO_RENDERING_START\n");
+            av_log(NULL, AV_LOG_INFO, "[IMAGE] First frame rendered\n");
         }
     }
 
@@ -267,14 +255,7 @@ void video_image_display(FFPlayer *ffp, VideoState *is)
     dst_rect.h = rect.h;
 
     /* 绘制视频纹理 */
-    static int draw_count = 0;
     vout_draw_texture(ffp->vout, is->vid_texture, NULL, &dst_rect, vp->flip_v);
-    
-    if (draw_count < 10 || draw_count % 60 == 0) {
-        av_log(NULL, AV_LOG_INFO, "[IMAGE] Draw texture #%d: rect=(%d,%d,%d,%d)\n",
-               draw_count, dst_rect.x, dst_rect.y, dst_rect.w, dst_rect.h);
-    }
-    draw_count++;
     
     /* 绘制字幕 */
     if (sp) {
@@ -543,9 +524,6 @@ int video_open(FFPlayer *ffp, VideoState *is)
     w = ffp->screen_width ? ffp->screen_width : ffp->default_width;
     h = ffp->screen_height ? ffp->screen_height : ffp->default_height;
 
-    av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Called: render_mode=%d, native_window=%p, window=%p, size=%dx%d\n",
-           ffp->render_mode, ffp->native_window, ffp->window, w, h);
-
     /* 回调模式：不需要窗口操作，只设置尺寸 */
     if (ffp->render_mode == FFP_RENDER_MODE_CALLBACK) {
         /* 从视频流获取实际尺寸 */
@@ -555,7 +533,7 @@ int video_open(FFPlayer *ffp, VideoState *is)
         }
         is->width = w;
         is->height = h;
-        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Callback mode: video size %dx%d\n", w, h);
+        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Callback mode: %dx%d\n", w, h);
         ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, w, h);
         return 0;
     }
@@ -587,18 +565,12 @@ int video_open(FFPlayer *ffp, VideoState *is)
     is->width  = w;
     is->height = h;
     
-    av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Set is->width=%d, is->height=%d, vout=%p\n", w, h, ffp->vout);
-    
     /* 发送视频尺寸变化消息 */
     ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, w, h);
     
     /* 确保渲染线程已启动（视频流打开后启动） */
     if (ffp->auto_render_enabled && !ffp->render_tid) {
-        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Auto-starting render thread\n");
         ffp_start_render_thread(ffp);
-    } else {
-        av_log(NULL, AV_LOG_INFO, "[VIDEO_OPEN] Render thread: auto_render=%d, render_tid=%p\n",
-               ffp->auto_render_enabled, ffp->render_tid);
     }
 
     return 0;
@@ -607,16 +579,8 @@ int video_open(FFPlayer *ffp, VideoState *is)
 /* display the current picture, if any */
 void video_display(FFPlayer *ffp, VideoState *is)
 {
-    static int display_count = 0;
-    
     if (!is->width) {
-        av_log(NULL, AV_LOG_INFO, "[DISPLAY] Calling video_open, is->width=0\n");
         video_open(ffp, is);
-    }
-
-    if (display_count < 10 || display_count % 60 == 0) {
-        av_log(NULL, AV_LOG_INFO, "[DISPLAY] #%d: width=%d, show_mode=%d, video_st=%p, audio_st=%p, render_mode=%d\n",
-               display_count, is->width, is->show_mode, is->video_st, is->audio_st, ffp->render_mode);
     }
 
     /* 回调模式：通过回调传递帧数据给外部渲染 */
@@ -640,14 +604,8 @@ void video_display(FFPlayer *ffp, VideoState *is)
                 frame.pos = vp->pos;
                 
                 ffp->video_frame_cb(ffp->video_frame_cb_opaque, &frame);
-                
-                if (display_count < 10) {
-                    av_log(NULL, AV_LOG_INFO, "[DISPLAY] Callback mode: sent frame %dx%d, format=%d, pts=%.3f\n",
-                           frame.width, frame.height, frame.format, frame.pts);
-                }
             }
         }
-        display_count++;
         return;  /* 回调模式直接返回，不执行 SDL 渲染 */
     }
 
@@ -660,7 +618,6 @@ void video_display(FFPlayer *ffp, VideoState *is)
         video_image_display(ffp, is);
     }
     vout_render_present(ffp->vout);
-    display_count++;
 }
 
 /* seek in the stream */
@@ -720,20 +677,12 @@ void step_to_next_frame(VideoState *is)
 /* called to display each frame */
 void video_refresh(FFPlayer *ffp, VideoState *is, double *remaining_time)
 {
-    static int refresh_count = 0;
     double time;
 
     Frame *sp, *sp2;
-    
-    if (refresh_count < 10 || refresh_count % 60 == 0) {
-        av_log(NULL, AV_LOG_INFO, "[REFRESH] #%d: paused=%d, force_refresh=%d, show_mode=%d, video_st=%p\n",
-               refresh_count, is->paused, is->force_refresh, is->show_mode, is->video_st);
-    }
 
     if (!is->paused && get_master_sync_type(is) == AV_SYNC_EXTERNAL_CLOCK && is->realtime)
         check_external_clock_speed(is);
-    
-    refresh_count++;
 
     if (!ffp->display_disable && is->show_mode != SHOW_MODE_VIDEO && is->audio_st) {
         time = av_gettime_relative() / 1000000.0;
@@ -748,11 +697,6 @@ void video_refresh(FFPlayer *ffp, VideoState *is, double *remaining_time)
 retry:
         if (frame_queue_nb_remaining(&is->pictq) == 0) {
             // nothing to do, no picture to display in the queue
-            static int empty_count = 0;
-            if (empty_count < 10 || empty_count % 60 == 0) {
-                av_log(NULL, AV_LOG_INFO, "[REFRESH] pictq empty (count=%d)\n", empty_count);
-            }
-            empty_count++;
         } else {
             double last_duration, duration, delay;
             Frame *vp, *lastvp;
@@ -772,7 +716,13 @@ retry:
                 goto display;
 
             last_duration = vp_duration(is, lastvp, vp);
-            delay = compute_target_delay(last_duration, is);
+            
+            /* 
+             * 使用 compute_target_delay 计算延迟，倍速逻辑已集成在其中：
+             * - 正常播放：使用标准的 A-V 同步
+             * - 倍速播放：delay 会除以 playback_rate，同步阈值也会相应调整
+             */
+            delay = compute_target_delay(last_duration, is, ffp->playback_rate);
 
             time= av_gettime_relative()/1000000.0;
             if (time < is->frame_timer + delay) {
@@ -788,10 +738,31 @@ retry:
             if (!isnan(vp->pts))
                 update_video_pts(is, vp->pts, vp->pos, vp->serial);
             SDL_UnlockMutex(is->pictq.mutex);
+            
+            /* 日志：每300帧打印一次（仅在倍速模式下） */
+            {
+                static int video_log_counter = 0;
+                if (fabsf(ffp->playback_rate - 1.0f) > 0.001f && ++video_log_counter >= 300) {
+                    video_log_counter = 0;
+                    double sub_pts = -1.0;
+                    if (is->subtitle_st && frame_queue_nb_remaining(&is->subpq) > 0) {
+                        Frame *sub_sp = frame_queue_peek(&is->subpq);
+                        sub_pts = sub_sp->pts;
+                    }
+                    av_log(NULL, AV_LOG_INFO, 
+                           "[VIDEO] rate=%.2f vp_pts=%.3f sub_pts=%.3f delay=%.4f diff=%.4f\n",
+                           ffp->playback_rate, vp->pts, sub_pts, delay, 
+                           get_clock(&is->vidclk) - get_master_clock(is));
+                }
+            }
 
             if (frame_queue_nb_remaining(&is->pictq) > 1) {
                 Frame *nextvp = frame_queue_peek_next(&is->pictq);
                 duration = vp_duration(is, vp, nextvp);
+                /* 倍速播放时调整丢帧判断的 duration */
+                if (ffp->playback_rate > 0.001f && fabsf(ffp->playback_rate - 1.0f) > 0.001f) {
+                    duration = duration / ffp->playback_rate;
+                }
                 if(!is->step && (ffp->framedrop>0 || (ffp->framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) && time > is->frame_timer + duration){
                     is->frame_drops_late++;
                     frame_queue_next(&is->pictq);
@@ -842,13 +813,6 @@ retry:
 display:
         if (!ffp->display_disable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown) {
             video_display(ffp, is);
-        } else {
-            static int skip_count = 0;
-            if (skip_count < 10 || skip_count % 60 == 0) {
-                av_log(NULL, AV_LOG_INFO, "[REFRESH] Skip display: disable=%d, force=%d, mode=%d, rindex_shown=%d\n",
-                       ffp->display_disable, is->force_refresh, is->show_mode, is->pictq.rindex_shown);
-            }
-            skip_count++;
         }
     }
     is->force_refresh = 0;
@@ -953,7 +917,16 @@ int get_video_frame(FFPlayer *ffp, VideoState *is, AVFrame *frame)
         if (ffp->framedrop>0 || (ffp->framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) {
             if (frame->pts != AV_NOPTS_VALUE) {
                 double diff = dpts - get_master_clock(is);
-                if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD &&
+                /*
+                 * 倍速播放时的丢帧判断：
+                 * 当 playback_rate > 1.0 时，音频时钟推进更快，
+                 * 但视频帧 PTS 不变，diff 会更容易 < 0。
+                 * 为避免过度丢帧，使用更宽松的阈值或完全不丢帧。
+                 */
+                double drop_threshold = (ffp->playback_rate > 1.001f) ? 
+                                        AV_NOSYNC_THRESHOLD * ffp->playback_rate : 
+                                        AV_NOSYNC_THRESHOLD;
+                if (!isnan(diff) && fabs(diff) < drop_threshold &&
                     diff - is->frame_last_filter_delay < 0 &&
                     is->viddec.pkt_serial == is->vidclk.serial &&
                     is->videoq.nb_packets) {
@@ -1123,6 +1096,7 @@ int configure_audio_filters(FFPlayer *ffp, VideoState *is, const char *afilters,
     const AVDictionaryEntry *e = NULL;
     AVBPrint bp;
     char asrc_args[256];
+    char afilters_args[512] = "";
     int ret;
 
     avfilter_graph_free(&is->agraph);
@@ -1173,8 +1147,26 @@ int configure_audio_filters(FFPlayer *ffp, VideoState *is, const char *afilters,
             goto end;
     }
 
+    /* 构建滤镜字符串：先添加用户指定的滤镜 */
+    if (afilters && afilters[0]) {
+        av_strlcat(afilters_args, afilters, sizeof(afilters_args));
+    }
 
-    if ((ret = configure_filtergraph(is->agraph, afilters, filt_asrc, filt_asink)) < 0)
+    /* 添加倍速滤镜 atempo（范围 0.5 ~ 2.0）*/
+    if (ffp->playback_rate > 0.001f && fabsf(ffp->playback_rate - 1.0f) > 0.001f) {
+        float rate = ffp->playback_rate;
+        /* 限制范围 */
+        if (rate < 0.5f) rate = 0.5f;
+        if (rate > 2.0f) rate = 2.0f;
+        
+        if (afilters_args[0])
+            av_strlcat(afilters_args, ",", sizeof(afilters_args));
+        
+        av_strlcatf(afilters_args, sizeof(afilters_args), "atempo=%.2f", rate);
+        av_log(NULL, AV_LOG_INFO, "[AudioFilter] Adding atempo filter: rate=%.2f\n", rate);
+    }
+
+    if ((ret = configure_filtergraph(is->agraph, afilters_args[0] ? afilters_args : NULL, filt_asrc, filt_asink)) < 0)
         goto end;
 
     is->in_audio_filter  = filt_asrc;
@@ -1198,6 +1190,7 @@ int audio_thread(void *arg)
 #if CONFIG_AVFILTER
     int last_serial = -1;
     int reconfigure;
+    float last_playback_rate = 1.0f;  /* 记录上次的播放速率 */
 #endif
     int got_frame = 0;
     AVRational tb;
@@ -1214,12 +1207,24 @@ int audio_thread(void *arg)
                 tb = (AVRational){1, frame->sample_rate};
 
 #if CONFIG_AVFILTER
+                /* 检测是否需要重配置滤镜：格式变化、序列号变化、或倍速变化 */
                 reconfigure =
                     cmp_audio_fmts(is->audio_filter_src.fmt, is->audio_filter_src.ch_layout.nb_channels,
                                    frame->format, frame->ch_layout.nb_channels)    ||
                     av_channel_layout_compare(&is->audio_filter_src.ch_layout, &frame->ch_layout) ||
                     is->audio_filter_src.freq           != frame->sample_rate ||
-                    is->auddec.pkt_serial               != last_serial;
+                    is->auddec.pkt_serial               != last_serial ||
+                    ffp->playback_rate_changed;
+
+                /* 检测倍速变化 */
+                if (ffp->playback_rate_changed) {
+                    av_log(NULL, AV_LOG_INFO, "[AudioThread] Playback rate changed: %.2f -> %.2f, reconfiguring filters\n",
+                           last_playback_rate, ffp->playback_rate);
+                    av_log(NULL, AV_LOG_INFO, "[AudioThread] Before reconfig: input_frame_pts=%.3f audclk=%.3f sampq_size=%d\n",
+                           frame->pts * av_q2d(tb), is->audio_clock, frame_queue_nb_remaining(&is->sampq));
+                    ffp->playback_rate_changed = 0;
+                    last_playback_rate = ffp->playback_rate;
+                }
 
                 if (reconfigure) {
                     char buf1[1024], buf2[1024];
@@ -1229,6 +1234,37 @@ int audio_thread(void *arg)
                            "Audio frame changed from rate:%d ch:%d fmt:%s layout:%s serial:%d to rate:%d ch:%d fmt:%s layout:%s serial:%d\n",
                            is->audio_filter_src.freq, is->audio_filter_src.ch_layout.nb_channels, av_get_sample_fmt_name(is->audio_filter_src.fmt), buf1, last_serial,
                            frame->sample_rate, frame->ch_layout.nb_channels, av_get_sample_fmt_name(frame->format), buf2, is->auddec.pkt_serial);
+
+                    /* 
+                     * 在销毁旧滤镜前，flush 滤镜获取所有缓冲的输出
+                     * 这样可以避免 atempo 滤镜内部缓冲数据丢失导致的 PTS 跳变
+                     */
+                    if (is->in_audio_filter && is->out_audio_filter) {
+                        AVFrame *flush_frame = av_frame_alloc();
+                        if (flush_frame) {
+                            /* 发送 NULL 帧触发 flush */
+                            av_buffersrc_add_frame(is->in_audio_filter, NULL);
+                            
+                            /* 获取所有缓冲的输出帧 */
+                            AVRational flush_tb = av_buffersink_get_time_base(is->out_audio_filter);
+                            while (av_buffersink_get_frame_flags(is->out_audio_filter, flush_frame, 0) >= 0) {
+                                Frame *flush_af = frame_queue_peek_writable(&is->sampq);
+                                if (flush_af) {
+                                    flush_af->pts = (flush_frame->pts == AV_NOPTS_VALUE) ? NAN : flush_frame->pts * av_q2d(flush_tb);
+                                    flush_af->pos = flush_frame->pkt_pos;
+                                    flush_af->serial = is->auddec.pkt_serial;
+                                    flush_af->duration = av_q2d((AVRational){flush_frame->nb_samples, flush_frame->sample_rate});
+                                    av_frame_move_ref(flush_af->frame, flush_frame);
+                                    frame_queue_push(&is->sampq);
+                                    av_log(NULL, AV_LOG_INFO, "[AudioFilter] Flush output: pts=%.3f\n", flush_af->pts);
+                                } else {
+                                    av_frame_unref(flush_frame);
+                                    break;
+                                }
+                            }
+                            av_frame_free(&flush_frame);
+                        }
+                    }
 
                     is->audio_filter_src.fmt            = frame->format;
                     ret = av_channel_layout_copy(&is->audio_filter_src.ch_layout, &frame->ch_layout);
@@ -1254,6 +1290,18 @@ int audio_thread(void *arg)
                 af->pos = frame->pkt_pos;
                 af->serial = is->auddec.pkt_serial;
                 af->duration = av_q2d((AVRational){frame->nb_samples, frame->sample_rate});
+
+                /* 日志：追踪滤镜输出帧的 PTS */
+                {
+                    static double last_output_pts = 0;
+                    static int output_log_counter = 0;
+                    if (fabsf(ffp->playback_rate - 1.0f) > 0.001f && ++output_log_counter >= 100) {
+                        output_log_counter = 0;
+                        av_log(NULL, AV_LOG_INFO, "[AudioFilter] Output: pts=%.3f delta=%.3f nb_samples=%d\n",
+                               af->pts, af->pts - last_output_pts, frame->nb_samples);
+                    }
+                    last_output_pts = af->pts;
+                }
 
                 av_frame_move_ref(af->frame, frame);
                 frame_queue_push(&is->sampq);
@@ -1579,6 +1627,18 @@ int audio_decode_frame(FFPlayer *ffp, VideoState *is)
     else
         is->audio_clock = NAN;
     is->audio_clock_serial = af->serial;
+    
+    /* 检测音频时钟跳变 */
+    if (!isnan(audio_clock0) && !isnan(is->audio_clock)) {
+        double clock_delta = is->audio_clock - audio_clock0;
+        /* 如果时钟跳变超过 0.5 秒，记录日志 */
+        if (fabs(clock_delta) > 0.5 || clock_delta < -0.1) {
+            av_log(NULL, AV_LOG_WARNING, 
+                   "[AudioClock] JUMP DETECTED! clock: %.3f -> %.3f (delta=%.3f) af_pts=%.3f serial=%d\n",
+                   audio_clock0, is->audio_clock, clock_delta, af->pts, af->serial);
+        }
+    }
+    
 #ifdef DEBUG
     {
         static double last_clock;

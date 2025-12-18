@@ -181,8 +181,9 @@ typedef struct FFPlayer {
     int packet_buffering;
     int max_fps;
 
-    /* 播放速率 (当前空实现，ffplay不支持) */
+    /* 播放速率 */
     float playback_rate;
+    int playback_rate_changed;  /* 倍速变化标志，用于动态重配置音频滤镜 */
 
     /* 选项字典 (参考 ijkplayer) */
     AVDictionary *format_opts;
