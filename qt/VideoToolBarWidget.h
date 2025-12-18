@@ -101,9 +101,19 @@ public:
     void setProgress(int value);
     int progress() const;
 
+    // 播放方向枚举
+    enum PlayDirection {
+        Forward,    // 正放
+        Backward    // 倒放
+    };
+
     // 设置播放状态
     void setPlaying(bool playing);
     bool isPlaying() const;
+    
+    // 设置播放方向
+    void setPlayDirection(PlayDirection direction);
+    PlayDirection playDirection() const;
 
     // 设置倍速
     void setSpeed(float speed);
@@ -129,9 +139,16 @@ signals:
     // 播放控制信号
     void stepBackwardClicked();      // 逐帧倒放
     void backwardClicked();          // 倒放
-    void playPauseClicked();         // 播放/暂停
+    void playPauseClicked();         // 播放/暂停切换
     void stepForwardClicked();       // 逐帧正放
     void forwardClicked();           // 正放
+    
+    // 播放状态信号
+    void playStateChanged(bool playing, PlayDirection direction);  // 播放状态改变
+    void forwardPlay();              // 开始正放
+    void forwardPause();             // 正放暂停
+    void backwardPlay();             // 开始倒放
+    void backwardPause();            // 倒放暂停
 
     // 进度条信号
     void progressChanged(int value); // 进度条值改变
@@ -151,6 +168,8 @@ signals:
 
 private slots:
     void onPlayPauseClicked();
+    void onForwardClicked();
+    void onBackwardClicked();
     void onSpeedComboChanged(int index);
     void onResolutionComboChanged(int index);
     void onProgressSliderChanged(int value);
@@ -158,6 +177,9 @@ private slots:
     void onProgressSliderReleased();
     void onVolumeButtonClicked();
     void onVolumePopupChanged(int volume);
+    
+private:
+    void updatePlayButtons();  // 更新按钮状态显示
 
 public:
     // 上方区域控件
@@ -179,6 +201,7 @@ public:
 
     // 状态
     bool isPlaying_;
+    PlayDirection direction_;  // 当前播放方向
     qint64 currentTime_;
     qint64 duration_;
     int volume_;
