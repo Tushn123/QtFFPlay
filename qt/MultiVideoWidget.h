@@ -6,7 +6,7 @@
 #include "htable.h"
 #include "VideoWidget.h"
 
-#define MV_STYLE_MAXNUM     4
+#define MV_STYLE_MAXNUM     1
 
 // F(id, row, col, label, image)
 #define FOREACH_MV_STYLE(F) \

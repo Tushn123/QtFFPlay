@@ -2122,6 +2122,11 @@ int read_thread(void *arg)
             is->seek_req = 0;
             is->queue_attachments_req = 1;
             is->eof = 0;
+            
+            /* 发送 seek 完成消息，通知上层清除 seek_req 标志 */
+            ffp_notify_msg3(ffp, FFP_MSG_SEEK_COMPLETE, 
+                           (int)(seek_target / (AV_TIME_BASE / 1000)), ret);
+            
             if (is->paused)
                 step_to_next_frame(is);
         }
