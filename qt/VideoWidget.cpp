@@ -95,6 +95,16 @@ void VideoWidget::initUi()
         qDebug() << "[VideoWidget] Volume changed to:" << volume;
         playerWidget->setVolume(volume);
     });
+    
+    // 标题栏缩放模式选择 -> 视频渲染组件
+    connect(videoTitleBarWidget, &VideoTitleBarWidget::scaleModeChanged,
+            this, [this](ScaleMode mode) {
+        const char* modeNames[] = {"Fit", "Stretch", "Fill"};
+        qDebug() << "[VideoWidget] Scale mode changed to:" << modeNames[static_cast<int>(mode)];
+        if (playerWidget->videoWidget()) {
+            playerWidget->videoWidget()->setScaleMode(mode);
+        }
+    });
 
     // 设置默认媒体文件
     QString mediaPath = "C:/shn/media/animal.mp4";
@@ -116,6 +126,16 @@ void VideoWidget::leaveEvent(QEvent* event) {
     
     // 检查是否有弹出控件正在显示
     // 如果有，则不隐藏工具栏（避免闪动）
+    
+    // 检查标题栏的下拉框状态
+    if (videoTitleBarWidget && videoTitleBarWidget->scaleModeCombo) {
+        QComboBox *scaleModeCombo = videoTitleBarWidget->scaleModeCombo;
+        if (scaleModeCombo->view() && scaleModeCombo->view()->isVisible()) {
+            return;
+        }
+    }
+    
+    // 检查底部工具栏的下拉框状态
     if (videoToolBarWidget) {
         // 检查 speedCombo 和 resolutionCombo 的下拉框状态
         QComboBox *speedCombo = videoToolBarWidget->speedCombo;

@@ -1238,7 +1238,7 @@ int audio_thread(void *arg)
                  * 必须在更新 last_playback_rate 之前保存！
                  */
                 float flush_playback_rate = last_playback_rate;
-                
+
                 /* 检测倍速变化 */
                 if (ffp->playback_rate_changed) {
                     av_log(NULL, AV_LOG_INFO, "[AudioThread] Playback rate changed: %.2f -> %.2f, reconfiguring filters\n",
