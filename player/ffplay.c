@@ -739,20 +739,21 @@ retry:
                 update_video_pts(is, vp->pts, vp->pos, vp->serial);
             SDL_UnlockMutex(is->pictq.mutex);
             
-            /* 日志：每300帧打印一次（仅在倍速模式下） */
+            /* 日志：定期打印音视频同步状态 */
             {
                 static int video_log_counter = 0;
-                if (fabsf(ffp->playback_rate - 1.0f) > 0.001f && ++video_log_counter >= 300) {
+                static double last_vp_pts = 0;
+                if (++video_log_counter >= 150) {  // 每150帧打印一次（约5秒@30fps）
                     video_log_counter = 0;
-                    double sub_pts = -1.0;
-                    if (is->subtitle_st && frame_queue_nb_remaining(&is->subpq) > 0) {
-                        Frame *sub_sp = frame_queue_peek(&is->subpq);
-                        sub_pts = sub_sp->pts;
-                    }
+                    double audclk = get_clock(&is->audclk);
+                    double vidclk = get_clock(&is->vidclk);
+                    double av_diff = vidclk - audclk;
                     av_log(NULL, AV_LOG_INFO, 
-                           "[VIDEO] rate=%.2f vp_pts=%.3f sub_pts=%.3f delay=%.4f diff=%.4f\n",
-                           ffp->playback_rate, vp->pts, sub_pts, delay, 
-                           get_clock(&is->vidclk) - get_master_clock(is));
+                           "[AV-SYNC] vp_pts=%.3f audclk=%.3f vidclk=%.3f diff=%.4f "
+                           "delay=%.4f rate=%.2f vp_delta=%.3f\n",
+                           vp->pts, audclk, vidclk, av_diff,
+                           delay, ffp->playback_rate, vp->pts - last_vp_pts);
+                    last_vp_pts = vp->pts;
                 }
             }
 
@@ -871,6 +872,8 @@ display:
 int queue_picture(FFPlayer *ffp, VideoState *is, AVFrame *src_frame, double pts, double duration, int64_t pos, int serial)
 {
     Frame *vp;
+    static int last_serial = -1;
+    static double last_pts = 0;
 
 #if defined(DEBUG_SYNC)
     printf("frame_type=%c pts=%0.3f\n",
@@ -891,6 +894,20 @@ int queue_picture(FFPlayer *ffp, VideoState *is, AVFrame *src_frame, double pts,
     vp->duration = duration;
     vp->pos = pos;
     vp->serial = serial;
+    
+    /* 检测 seek 后的第一帧（serial 变化）或 PTS 跳变 */
+    if (serial != last_serial) {
+        av_log(NULL, AV_LOG_INFO, 
+               "[VIDEO-QUEUE] First frame after seek: pts=%.3f serial=%d->%d audclk=%.3f\n",
+               pts, last_serial, serial, get_clock(&is->audclk));
+        last_serial = serial;
+    } else if (!isnan(pts) && !isnan(last_pts) && fabs(pts - last_pts) > 1.0) {
+        /* PTS 跳变超过 1 秒 */
+        av_log(NULL, AV_LOG_WARNING, 
+               "[VIDEO-QUEUE] PTS jump: %.3f -> %.3f (delta=%.3f)\n",
+               last_pts, pts, pts - last_pts);
+    }
+    last_pts = pts;
 
     set_default_window_size(ffp, vp->width, vp->height, vp->sar);
 
@@ -1216,6 +1233,12 @@ int audio_thread(void *arg)
                     is->auddec.pkt_serial               != last_serial ||
                     ffp->playback_rate_changed;
 
+                /* 
+                 * 保存旧的 playback_rate，用于 flush 时标记帧
+                 * 必须在更新 last_playback_rate 之前保存！
+                 */
+                float flush_playback_rate = last_playback_rate;
+                
                 /* 检测倍速变化 */
                 if (ffp->playback_rate_changed) {
                     av_log(NULL, AV_LOG_INFO, "[AudioThread] Playback rate changed: %.2f -> %.2f, reconfiguring filters\n",
@@ -1254,9 +1277,10 @@ int audio_thread(void *arg)
                                     flush_af->pos = flush_frame->pkt_pos;
                                     flush_af->serial = is->auddec.pkt_serial;
                                     flush_af->duration = av_q2d((AVRational){flush_frame->nb_samples, flush_frame->sample_rate});
+                                    flush_af->playback_rate = flush_playback_rate;  // 使用旧的倍速！
                                     av_frame_move_ref(flush_af->frame, flush_frame);
                                     frame_queue_push(&is->sampq);
-                                    av_log(NULL, AV_LOG_INFO, "[AudioFilter] Flush output: pts=%.3f\n", flush_af->pts);
+                                    av_log(NULL, AV_LOG_INFO, "[AudioFilter] Flush output: pts=%.3f rate=%.2f\n", flush_af->pts, flush_af->playback_rate);
                                 } else {
                                     av_frame_unref(flush_frame);
                                     break;
@@ -1290,15 +1314,32 @@ int audio_thread(void *arg)
                 af->pos = frame->pkt_pos;
                 af->serial = is->auddec.pkt_serial;
                 af->duration = av_q2d((AVRational){frame->nb_samples, frame->sample_rate});
+                af->playback_rate = ffp->playback_rate;  // 记录该帧对应的播放倍速
 
-                /* 日志：追踪滤镜输出帧的 PTS */
+                /* 日志：检测 seek 后第一帧和定期追踪 */
                 {
+                    static int last_audio_serial = -1;
                     static double last_output_pts = 0;
                     static int output_log_counter = 0;
-                    if (fabsf(ffp->playback_rate - 1.0f) > 0.001f && ++output_log_counter >= 100) {
+                    
+                    /* seek 后第一帧（serial 变化） */
+                    if (af->serial != last_audio_serial) {
+                        double media_pts = af->pts * af->playback_rate;
+                        av_log(NULL, AV_LOG_INFO, 
+                               "[AUDIO-QUEUE] First frame after seek: af_pts=%.3f media_pts=%.3f "
+                               "serial=%d->%d rate=%.2f vidclk=%.3f\n",
+                               af->pts, media_pts, last_audio_serial, af->serial,
+                               af->playback_rate, get_clock(&is->vidclk));
+                        last_audio_serial = af->serial;
+                    }
+                    
+                    /* 定期打印状态 */
+                    if (++output_log_counter >= 200) {  // 约每4秒打印一次
                         output_log_counter = 0;
-                        av_log(NULL, AV_LOG_INFO, "[AudioFilter] Output: pts=%.3f delta=%.3f nb_samples=%d\n",
-                               af->pts, af->pts - last_output_pts, frame->nb_samples);
+                        double media_pts = af->pts * af->playback_rate;
+                        av_log(NULL, AV_LOG_INFO, 
+                               "[AUDIO] af_pts=%.3f media_pts=%.3f delta=%.3f rate=%.2f\n",
+                               af->pts, media_pts, af->pts - last_output_pts, af->playback_rate);
                     }
                     last_output_pts = af->pts;
                 }
@@ -1622,20 +1663,43 @@ int audio_decode_frame(FFPlayer *ffp, VideoState *is)
 
     audio_clock0 = is->audio_clock;
     /* update the audio clock with the pts */
-    if (!isnan(af->pts))
-        is->audio_clock = af->pts + (double) af->frame->nb_samples / af->frame->sample_rate;
-    else
+    if (!isnan(af->pts)) {
+        /*
+         * 重要：atempo 滤镜输出的 PTS 是"播放时间"而非"媒体时间"
+         * 例如：0.5倍速时，原始5秒音频被拉伸成10秒播放，atempo输出PTS是0-10
+         * 但视频的PTS仍然是原始媒体时间（0-5秒对应原始内容）
+         * 
+         * 为了正确同步，需要将播放时间转换回媒体时间：
+         * 媒体时间 = 播放时间 × playback_rate
+         * 
+         * 关键：必须使用该帧入队时的 playback_rate（af->playback_rate），
+         * 而不是当前的 ffp->playback_rate，否则在倍速切换时会导致时钟跳变
+         */
+        double media_pts = af->pts;
+        double samples_duration = (double)af->frame->nb_samples / af->frame->sample_rate;
+        float frame_rate = af->playback_rate;
+        
+        if (frame_rate > 0.001f && fabsf(frame_rate - 1.0f) > 0.001f) {
+            media_pts = af->pts * frame_rate;
+            samples_duration = samples_duration * frame_rate;
+        }
+        is->audio_clock = media_pts + samples_duration;
+    } else {
         is->audio_clock = NAN;
+    }
     is->audio_clock_serial = af->serial;
     
-    /* 检测音频时钟跳变 */
+    /* 检测音频时钟跳变（可能由 seek 或倍速切换引起） */
     if (!isnan(audio_clock0) && !isnan(is->audio_clock)) {
         double clock_delta = is->audio_clock - audio_clock0;
-        /* 如果时钟跳变超过 0.5 秒，记录日志 */
+        /* 如果时钟跳变超过 0.5 秒或回退，记录详细日志 */
         if (fabs(clock_delta) > 0.5 || clock_delta < -0.1) {
+            double vidclk = get_clock(&is->vidclk);
             av_log(NULL, AV_LOG_WARNING, 
-                   "[AudioClock] JUMP DETECTED! clock: %.3f -> %.3f (delta=%.3f) af_pts=%.3f serial=%d\n",
-                   audio_clock0, is->audio_clock, clock_delta, af->pts, af->serial);
+                   "[CLOCK-JUMP] audio: %.3f->%.3f (delta=%.3f) vidclk=%.3f "
+                   "af_pts=%.3f af_rate=%.2f serial=%d\n",
+                   audio_clock0, is->audio_clock, clock_delta, vidclk,
+                   af->pts, af->playback_rate, af->serial);
         }
     }
     
@@ -2161,6 +2225,13 @@ int read_thread(void *arg)
             int64_t seek_target = is->seek_pos;
             int64_t seek_min    = is->seek_rel > 0 ? seek_target - is->seek_rel + 2: INT64_MIN;
             int64_t seek_max    = is->seek_rel < 0 ? seek_target - is->seek_rel - 2: INT64_MAX;
+            
+            /* Seek 前的状态日志 */
+            av_log(NULL, AV_LOG_INFO, 
+                   "[SEEK] >>> Before: target=%.3f audclk=%.3f vidclk=%.3f audio_clock=%.3f rate=%.2f\n",
+                   seek_target / (double)AV_TIME_BASE,
+                   get_clock(&is->audclk), get_clock(&is->vidclk),
+                   is->audio_clock, ffp->playback_rate);
 
             ret = avformat_seek_file(is->ic, -1, seek_min, seek_target, seek_max, is->seek_flags);
             if (ret < 0) {
@@ -2178,6 +2249,12 @@ int read_thread(void *arg)
                 } else {
                    set_clock(&is->extclk, seek_target / (double)AV_TIME_BASE, 0);
                 }
+                
+                av_log(NULL, AV_LOG_INFO, 
+                       "[SEEK] <<< After flush: extclk=%.3f sampq=%d pictq=%d\n",
+                       get_clock(&is->extclk),
+                       frame_queue_nb_remaining(&is->sampq),
+                       frame_queue_nb_remaining(&is->pictq));
             }
             is->seek_req = 0;
             is->queue_attachments_req = 1;

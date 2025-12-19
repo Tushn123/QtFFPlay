@@ -60,6 +60,7 @@ typedef struct Frame {
     AVRational sar;       // 图像的宽⾼⽐，如果未知或未指定则为0/1, 该值来⾃AVFrame结构体的sample_aspect_ratio变量
     int uploaded;         // =1时表示图像数据已经上传到SDL纹理, 记录该帧是否已经显示过
     int flip_v;           // =1时表示图像需要垂直翻转, = 0则正常播放
+    float playback_rate;  // 该音频帧对应的播放倍速（用于正确转换 atempo 输出的 PTS）
 } Frame;
 
 // 环形队列，每⼀个frame_queue⼀个写端⼀个读端，写端位于解码线程，读端位于播放线程

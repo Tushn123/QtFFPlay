@@ -43,6 +43,12 @@ public:
     void togglePause();
     
     /**
+     * 逐帧前进
+     * 如果正在播放，先暂停再前进一帧
+     */
+    void stepForward();
+    
+    /**
      * 跳转到指定位置
      * @param msec 目标位置（毫秒）
      */

@@ -313,6 +313,14 @@ void PlayerWidget::togglePause()
     }
 }
 
+void PlayerWidget::stepForward()
+{
+    if (m_mp) {
+        mp_step_to_next_frame(m_mp);
+        qDebug() << "[PlayerWidget] Step forward";
+    }
+}
+
 void PlayerWidget::seekTo(long msec)
 {
     if (!m_mp) {

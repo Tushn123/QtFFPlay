@@ -822,6 +822,24 @@ int mp_is_muted(MediaPlayer *mp)
 
 /*
  * =============================================================================
+ * 逐帧播放控制
+ * =============================================================================
+ */
+
+void mp_step_to_next_frame(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    pthread_mutex_lock(&mp->mutex);
+    ffp_step_to_next_frame(mp->ffplayer);
+    pthread_mutex_unlock(&mp->mutex);
+    
+    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Step to next frame\n");
+}
+
+/*
+ * =============================================================================
  * 播放速率控制
  * =============================================================================
  */

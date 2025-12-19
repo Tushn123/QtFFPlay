@@ -159,16 +159,6 @@ double compute_target_delay(double delay, VideoState *is, float playback_rate)
                 delay = 2 * delay;
         }
         
-        // 日志：每300帧打印一次详细信息（倍速模式下）
-        static int log_counter = 0;
-        if (fabsf(playback_rate - 1.0f) > 0.001f && ++log_counter >= 300) {
-            log_counter = 0;
-            av_log(NULL, AV_LOG_INFO, 
-                   "[SYNC] rate=%.2f vidclk=%.3f audclk=%.3f diff=%.4f "
-                   "threshold=%.4f orig_delay=%.4f sync_delay=%.4f\n",
-                   playback_rate, vidclk, audclk, diff, 
-                   sync_threshold, original_delay, delay);
-        }
     }
 
     /*
