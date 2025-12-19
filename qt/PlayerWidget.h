@@ -73,6 +73,49 @@ public:
     // 获取 OpenGL 渲染组件
     VideoGLWidget* videoWidget() const { return m_videoWidget; }
 
+    /**
+     * 硬件加速类型
+     */
+    enum class HWAccelType {
+        None = 0,          // 软解码
+        Auto,              // 自动选择
+        DXVA2,             // Windows DXVA2
+        D3D11VA,           // Windows D3D11
+        CUDA,              // NVIDIA CUDA
+        VAAPI,             // Linux VAAPI
+        VDPAU,             // Linux VDPAU
+        VideoToolbox,      // macOS VideoToolbox
+        QSV                // Intel Quick Sync
+    };
+    Q_ENUM(HWAccelType)
+
+    /**
+     * 设置硬件加速类型（必须在 setMedia 之前调用）
+     * @param type 硬件加速类型
+     */
+    void setHWAccelType(HWAccelType type);
+    
+    /**
+     * 获取当前硬件加速类型
+     */
+    HWAccelType hwAccelType() const;
+    
+    /**
+     * 获取可用的硬件加速列表
+     * @return 硬件加速类型列表 (type, name, available)
+     */
+    static QList<std::tuple<HWAccelType, QString, bool>> availableHWAccels();
+    
+    /**
+     * 检查指定硬件加速是否可用
+     */
+    static bool isHWAccelAvailable(HWAccelType type);
+    
+    /**
+     * 获取硬件加速类型名称
+     */
+    static QString hwAccelName(HWAccelType type);
+
 protected:
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -135,6 +178,9 @@ private:
     
     // 渲染模式
     RenderMode m_renderMode;
+    
+    // 硬件加速类型
+    HWAccelType m_hwAccelType;
     
     // OpenGL 渲染组件
     VideoGLWidget *m_videoWidget;

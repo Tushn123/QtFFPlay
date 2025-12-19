@@ -664,6 +664,74 @@ void mp_set_video_frame_callback(MediaPlayer *mp, ffp_video_frame_callback cb, v
  */
 struct FFPlayer *mp_get_ffplayer(MediaPlayer *mp);
 
+/*
+ * =============================================================================
+ * 硬件加速控制
+ * =============================================================================
+ */
+
+/**
+ * 硬件加速类型（与 FFPHWAccelType 对应）
+ */
+typedef enum {
+    MP_HWACCEL_NONE = 0,           /* 软解码 */
+    MP_HWACCEL_AUTO,               /* 自动选择 */
+    MP_HWACCEL_DXVA2,              /* Windows DXVA2 */
+    MP_HWACCEL_D3D11VA,            /* Windows D3D11 */
+    MP_HWACCEL_CUDA,               /* NVIDIA CUDA */
+    MP_HWACCEL_VAAPI,              /* Linux VAAPI */
+    MP_HWACCEL_VDPAU,              /* Linux VDPAU */
+    MP_HWACCEL_VIDEOTOOLBOX,       /* macOS VideoToolbox */
+    MP_HWACCEL_QSV,                /* Intel Quick Sync */
+    MP_HWACCEL_COUNT               /* 类型总数 */
+} MPHWAccelType;
+
+/**
+ * 硬件加速信息
+ */
+typedef struct MPHWAccelInfo {
+    MPHWAccelType type;            /* 硬件加速类型 */
+    const char *name;              /* 名称 */
+    const char *description;       /* 描述 */
+    int available;                 /* 是否可用 */
+} MPHWAccelInfo;
+
+/**
+ * 设置硬件加速类型（必须在 mp_prepare_async 之前调用）
+ * @param mp MediaPlayer 实例
+ * @param type 硬件加速类型
+ */
+void mp_set_hwaccel_type(MediaPlayer *mp, MPHWAccelType type);
+
+/**
+ * 获取当前硬件加速类型
+ * @param mp MediaPlayer 实例
+ * @return 硬件加速类型
+ */
+MPHWAccelType mp_get_hwaccel_type(MediaPlayer *mp);
+
+/**
+ * 获取可用的硬件加速列表
+ * @param infos 输出信息数组（调用者提供，大小至少为 MP_HWACCEL_COUNT）
+ * @param max_count 数组最大容量
+ * @return 实际检测到的硬件加速数量
+ */
+int mp_get_available_hwaccels(MPHWAccelInfo *infos, int max_count);
+
+/**
+ * 检查指定硬件加速是否可用
+ * @param type 硬件加速类型
+ * @return 1=可用, 0=不可用
+ */
+int mp_is_hwaccel_available(MPHWAccelType type);
+
+/**
+ * 获取硬件加速类型名称
+ * @param type 硬件加速类型
+ * @return 名称字符串
+ */
+const char *mp_get_hwaccel_name(MPHWAccelType type);
+
 #ifdef __cplusplus
 }
 #endif

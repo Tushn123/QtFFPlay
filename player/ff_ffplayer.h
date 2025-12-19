@@ -56,6 +56,38 @@ typedef enum FFPRenderMode {
     FFP_RENDER_MODE_CALLBACK = 1,  /* 回调模式，外部渲染 */
 } FFPRenderMode;
 
+/*
+ * =============================================================================
+ * 硬件加速定义
+ * =============================================================================
+ */
+
+/**
+ * 硬件加速类型枚举
+ */
+typedef enum FFPHWAccelType {
+    FFP_HWACCEL_NONE = 0,          /* 软解码（默认）*/
+    FFP_HWACCEL_AUTO,              /* 自动选择最佳硬件加速 */
+    FFP_HWACCEL_DXVA2,             /* Windows DXVA2 */
+    FFP_HWACCEL_D3D11VA,           /* Windows D3D11 Video Acceleration */
+    FFP_HWACCEL_CUDA,              /* NVIDIA CUDA/NVDEC */
+    FFP_HWACCEL_VAAPI,             /* Linux VAAPI */
+    FFP_HWACCEL_VDPAU,             /* Linux VDPAU */
+    FFP_HWACCEL_VIDEOTOOLBOX,      /* macOS VideoToolbox */
+    FFP_HWACCEL_QSV,               /* Intel Quick Sync Video */
+    FFP_HWACCEL_COUNT              /* 类型总数 */
+} FFPHWAccelType;
+
+/**
+ * 硬件加速信息结构
+ */
+typedef struct FFPHWAccelInfo {
+    FFPHWAccelType type;           /* 硬件加速类型 */
+    const char *name;              /* 名称 */
+    const char *description;       /* 描述 */
+    int available;                 /* 是否可用 */
+} FFPHWAccelInfo;
+
 /**
  * 传递给外部的视频帧数据
  */
@@ -184,6 +216,14 @@ typedef struct FFPlayer {
     /* 播放速率 */
     float playback_rate;
     int playback_rate_changed;  /* 倍速变化标志，用于动态重配置音频滤镜 */
+
+    /* 硬件加速 */
+    FFPHWAccelType hwaccel_type;       /* 当前硬件加速类型 */
+    char *hwaccel_device;              /* 硬件设备路径（可选）*/
+    void *hw_device_ctx;               /* AVBufferRef *hw_device_ctx 硬件设备上下文 */
+    int hw_pix_fmt;                    /* enum AVPixelFormat 硬件像素格式 */
+    int hwaccel_failed;                /* 硬解失败标志，回退软解 */
+    int hwaccel_retrieve_data;         /* 是否需要从 GPU 拷贝数据到 CPU */
 
     /* 选项字典 (参考 ijkplayer) */
     AVDictionary *format_opts;
@@ -617,5 +657,47 @@ FFPRenderMode ffp_get_render_mode(FFPlayer *ffp);
  * @param opaque 传递给回调的用户数据
  */
 void ffp_set_video_frame_callback(FFPlayer *ffp, ffp_video_frame_callback cb, void *opaque);
+
+/*
+ * =============================================================================
+ * 硬件加速控制
+ * =============================================================================
+ */
+
+/**
+ * 设置硬件加速类型（必须在 ffp_prepare_async 之前调用）
+ * @param ffp FFPlayer实例
+ * @param type 硬件加速类型
+ */
+void ffp_set_hwaccel_type(FFPlayer *ffp, FFPHWAccelType type);
+
+/**
+ * 获取当前硬件加速类型
+ * @param ffp FFPlayer实例
+ * @return 硬件加速类型
+ */
+FFPHWAccelType ffp_get_hwaccel_type(FFPlayer *ffp);
+
+/**
+ * 获取可用的硬件加速列表
+ * @param infos 输出信息数组（调用者提供，大小至少为 FFP_HWACCEL_COUNT）
+ * @param max_count 数组最大容量
+ * @return 实际可用的硬件加速数量
+ */
+int ffp_get_available_hwaccels(FFPHWAccelInfo *infos, int max_count);
+
+/**
+ * 检查指定硬件加速是否可用
+ * @param type 硬件加速类型
+ * @return 1=可用, 0=不可用
+ */
+int ffp_is_hwaccel_available(FFPHWAccelType type);
+
+/**
+ * 获取硬件加速类型名称
+ * @param type 硬件加速类型
+ * @return 名称字符串
+ */
+const char *ffp_get_hwaccel_name(FFPHWAccelType type);
 
 #endif /* FF_FFPLAYER_H */

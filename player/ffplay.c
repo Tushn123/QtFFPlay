@@ -32,6 +32,209 @@ extern void ffp_notify_msg1(FFPlayer *ffp, int what);
 extern void ffp_notify_msg2(FFPlayer *ffp, int what, int arg1);
 extern void ffp_notify_msg3(FFPlayer *ffp, int what, int arg1, int arg2);
 
+/* 硬件加速相关函数声明（在 ff_ffplayer.c 中实现）*/
+extern enum AVHWDeviceType ffp_get_av_hwdevice_type(FFPHWAccelType type);
+extern const char *ffp_get_hwaccel_name(FFPHWAccelType type);
+
+/*
+ * =============================================================================
+ * 硬件解码支持
+ * =============================================================================
+ */
+
+/* 获取硬件像素格式回调 */
+static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
+                                        const enum AVPixelFormat *pix_fmts)
+{
+    FFPlayer *ffp = (FFPlayer *)ctx->opaque;
+    const enum AVPixelFormat *p;
+
+    for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+        if (*p == ffp->hw_pix_fmt) {
+            av_log(NULL, AV_LOG_INFO, "[HWAccel] Using hardware pixel format: %s\n",
+                   av_get_pix_fmt_name(*p));
+            return *p;
+        }
+    }
+
+    av_log(NULL, AV_LOG_WARNING, "[HWAccel] Hardware format not available, using software\n");
+    ffp->hwaccel_failed = 1;
+    return AV_PIX_FMT_NONE;
+}
+
+/* 初始化硬件解码器 */
+static int hw_decoder_init(FFPlayer *ffp, AVCodecContext *ctx, enum AVHWDeviceType type)
+{
+    int ret;
+    AVBufferRef *hw_device_ctx = NULL;
+
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, type, ffp->hwaccel_device, NULL, 0);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[HWAccel] Failed to create %s device: %s\n",
+               av_hwdevice_get_type_name(type), av_err2str(ret));
+        return ret;
+    }
+
+    ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+    if (!ctx->hw_device_ctx) {
+        av_buffer_unref(&hw_device_ctx);
+        return AVERROR(ENOMEM);
+    }
+
+    /* 保存到 FFPlayer 以便后续清理 */
+    if (ffp->hw_device_ctx) {
+        av_buffer_unref((AVBufferRef **)&ffp->hw_device_ctx);
+    }
+    ffp->hw_device_ctx = hw_device_ctx;
+
+    av_log(NULL, AV_LOG_INFO, "[HWAccel] Hardware device created: %s\n",
+           av_hwdevice_get_type_name(type));
+    return 0;
+}
+
+/* 选择最佳的硬件加速类型（用于 AUTO 模式）*/
+static FFPHWAccelType select_best_hwaccel(const AVCodec *codec)
+{
+    /* 按优先级尝试不同的硬件加速 */
+    static const FFPHWAccelType preferred_types[] = {
+#ifdef _WIN32
+        FFP_HWACCEL_D3D11VA,
+        FFP_HWACCEL_DXVA2,
+#endif
+        FFP_HWACCEL_CUDA,
+#ifdef __linux__
+        FFP_HWACCEL_VAAPI,
+        FFP_HWACCEL_VDPAU,
+#endif
+#ifdef __APPLE__
+        FFP_HWACCEL_VIDEOTOOLBOX,
+#endif
+        FFP_HWACCEL_QSV,
+    };
+
+    for (int i = 0; i < sizeof(preferred_types) / sizeof(preferred_types[0]); i++) {
+        FFPHWAccelType type = preferred_types[i];
+        enum AVHWDeviceType av_type = ffp_get_av_hwdevice_type(type);
+        
+        if (av_type == AV_HWDEVICE_TYPE_NONE) {
+            continue;
+        }
+
+        /* 检查编解码器是否支持此硬件加速 */
+        for (int j = 0;; j++) {
+            const AVCodecHWConfig *config = avcodec_get_hw_config(codec, j);
+            if (!config) {
+                break;
+            }
+            if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
+                config->device_type == av_type) {
+                /* 尝试创建设备上下文验证可用性 */
+                AVBufferRef *test_ctx = NULL;
+                int ret = av_hwdevice_ctx_create(&test_ctx, av_type, NULL, NULL, 0);
+                if (ret >= 0) {
+                    av_buffer_unref(&test_ctx);
+                    av_log(NULL, AV_LOG_INFO, "[HWAccel] Auto-selected: %s\n",
+                           ffp_get_hwaccel_name(type));
+                    return type;
+                }
+            }
+        }
+    }
+
+    return FFP_HWACCEL_NONE;
+}
+
+/* 为视频解码器配置硬件加速 */
+static int configure_hwaccel(FFPlayer *ffp, AVCodecContext *avctx, const AVCodec *codec)
+{
+    FFPHWAccelType hwaccel_type = ffp->hwaccel_type;
+    enum AVHWDeviceType av_hw_type;
+    int ret;
+
+    /* 软解码直接返回 */
+    if (hwaccel_type == FFP_HWACCEL_NONE) {
+        av_log(NULL, AV_LOG_INFO, "[HWAccel] Using software decoding\n");
+        return 0;
+    }
+
+    /* 自动选择最佳硬件加速 */
+    if (hwaccel_type == FFP_HWACCEL_AUTO) {
+        hwaccel_type = select_best_hwaccel(codec);
+        if (hwaccel_type == FFP_HWACCEL_NONE) {
+            av_log(NULL, AV_LOG_INFO, "[HWAccel] No suitable hardware accelerator found\n");
+            return 0;
+        }
+    }
+
+    av_hw_type = ffp_get_av_hwdevice_type(hwaccel_type);
+    if (av_hw_type == AV_HWDEVICE_TYPE_NONE) {
+        av_log(NULL, AV_LOG_WARNING, "[HWAccel] Invalid hwaccel type: %d\n", hwaccel_type);
+        return 0;
+    }
+
+    /* 查找编解码器的硬件配置 */
+    const AVCodecHWConfig *config = NULL;
+    for (int i = 0;; i++) {
+        config = avcodec_get_hw_config(codec, i);
+        if (!config) {
+            av_log(NULL, AV_LOG_WARNING, 
+                   "[HWAccel] Codec %s does not support %s\n",
+                   codec->name, av_hwdevice_get_type_name(av_hw_type));
+            return 0;
+        }
+        if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
+            config->device_type == av_hw_type) {
+            ffp->hw_pix_fmt = config->pix_fmt;
+            break;
+        }
+    }
+
+    /* 初始化硬件设备 */
+    ret = hw_decoder_init(ffp, avctx, av_hw_type);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_WARNING, 
+               "[HWAccel] Failed to init %s, falling back to software\n",
+               ffp_get_hwaccel_name(hwaccel_type));
+        ffp->hwaccel_failed = 1;
+        return 0;
+    }
+
+    /* 设置像素格式回调 */
+    avctx->opaque = ffp;
+    avctx->get_format = get_hw_format;
+
+    av_log(NULL, AV_LOG_INFO, 
+           "[HWAccel] Configured %s for codec %s, pixel format: %s\n",
+           ffp_get_hwaccel_name(hwaccel_type), codec->name,
+           av_get_pix_fmt_name(ffp->hw_pix_fmt));
+
+    return 1;  /* 硬件加速配置成功 */
+}
+
+/* 将硬件帧转换为软件帧 */
+static int hw_frame_to_sw(AVFrame *hw_frame, AVFrame *sw_frame)
+{
+    int ret;
+
+    /* 分配软件帧缓冲 */
+    ret = av_hwframe_transfer_data(sw_frame, hw_frame, 0);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[HWAccel] Error transferring data from GPU: %s\n",
+               av_err2str(ret));
+        return ret;
+    }
+
+    /* 复制帧属性 */
+    ret = av_frame_copy_props(sw_frame, hw_frame);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[HWAccel] Error copying frame props: %s\n",
+               av_err2str(ret));
+        return ret;
+    }
+
+    return 0;
+}
+
 /* 将 AVPixelFormat 映射到 FFVoutPixelFormat */
 static FFVoutPixelFormat av_to_vout_format(enum AVPixelFormat format)
 {
@@ -481,6 +684,12 @@ void stream_close(FFPlayer *ffp, VideoState *is)
         stream_component_close(ffp, is, is->video_stream);
     if (is->subtitle_stream >= 0)
         stream_component_close(ffp, is, is->subtitle_stream);
+
+    /* 清理硬件设备上下文 */
+    if (ffp->hw_device_ctx) {
+        av_buffer_unref((AVBufferRef **)&ffp->hw_device_ctx);
+        ffp->hw_device_ctx = NULL;
+    }
 
     avformat_close_input(&is->ic);
 
@@ -1369,6 +1578,7 @@ int video_thread(void *arg)
     VideoState *is = arg;
     FFPlayer *ffp = is->ffp;
     AVFrame *frame = av_frame_alloc();
+    AVFrame *sw_frame = NULL;  /* 用于硬件帧转换 */
     double pts;
     double duration;
     int ret;
@@ -1395,18 +1605,44 @@ int video_thread(void *arg)
         if (!ret)
             continue;
 
+        /* 
+         * 硬件帧处理：
+         * 如果帧是硬件格式（存储在 GPU 内存中），需要转换到 CPU 内存
+         */
+        AVFrame *display_frame = frame;
+        if (frame->format == ffp->hw_pix_fmt && !ffp->hwaccel_failed) {
+            if (!sw_frame) {
+                sw_frame = av_frame_alloc();
+                if (!sw_frame) {
+                    av_log(NULL, AV_LOG_ERROR, "[HWAccel] Failed to allocate sw_frame\n");
+                    ret = AVERROR(ENOMEM);
+                    goto the_end;
+                }
+            }
+
+            ret = hw_frame_to_sw(frame, sw_frame);
+            if (ret < 0) {
+                av_log(NULL, AV_LOG_WARNING, 
+                       "[HWAccel] Frame transfer failed, switching to software decoding\n");
+                ffp->hwaccel_failed = 1;
+                /* 继续使用原始帧（可能无法正确显示）*/
+            } else {
+                display_frame = sw_frame;
+            }
+        }
+
 #if CONFIG_AVFILTER
-        if (   last_w != frame->width
-            || last_h != frame->height
-            || last_format != frame->format
+        if (   last_w != display_frame->width
+            || last_h != display_frame->height
+            || last_format != display_frame->format
             || last_serial != is->viddec.pkt_serial
             || last_vfilter_idx != is->vfilter_idx) {
             av_log(NULL, AV_LOG_DEBUG,
                    "Video frame changed from size:%dx%d format:%s serial:%d to size:%dx%d format:%s serial:%d\n",
                    last_w, last_h,
                    (const char *)av_x_if_null(av_get_pix_fmt_name(last_format), "none"), last_serial,
-                   frame->width, frame->height,
-                   (const char *)av_x_if_null(av_get_pix_fmt_name(frame->format), "none"), is->viddec.pkt_serial);
+                   display_frame->width, display_frame->height,
+                   (const char *)av_x_if_null(av_get_pix_fmt_name(display_frame->format), "none"), is->viddec.pkt_serial);
             avfilter_graph_free(&graph);
             graph = avfilter_graph_alloc();
             if (!graph) {
@@ -1414,7 +1650,7 @@ int video_thread(void *arg)
                 goto the_end;
             }
             graph->nb_threads = ffp->filter_nbthreads;
-            if ((ret = configure_video_filters(ffp, graph, is, ffp->vfilters_list ? ffp->vfilters_list[is->vfilter_idx] : NULL, frame)) < 0) {
+            if ((ret = configure_video_filters(ffp, graph, is, ffp->vfilters_list ? ffp->vfilters_list[is->vfilter_idx] : NULL, display_frame)) < 0) {
                 SDL_Event event;
                 event.type = FF_QUIT_EVENT;
                 event.user.data1 = is;
@@ -1423,15 +1659,20 @@ int video_thread(void *arg)
             }
             filt_in  = is->in_video_filter;
             filt_out = is->out_video_filter;
-            last_w = frame->width;
-            last_h = frame->height;
-            last_format = frame->format;
+            last_w = display_frame->width;
+            last_h = display_frame->height;
+            last_format = display_frame->format;
             last_serial = is->viddec.pkt_serial;
             last_vfilter_idx = is->vfilter_idx;
             frame_rate = av_buffersink_get_frame_rate(filt_out);
         }
 
-        ret = av_buffersrc_add_frame(filt_in, frame);
+        ret = av_buffersrc_add_frame(filt_in, display_frame);
+        
+        /* 清理转换后的软件帧 */
+        if (display_frame == sw_frame) {
+            av_frame_unref(sw_frame);
+        }
         if (ret < 0)
             goto the_end;
 
@@ -1468,6 +1709,7 @@ int video_thread(void *arg)
 #if CONFIG_AVFILTER
     avfilter_graph_free(&graph);
 #endif
+    av_frame_free(&sw_frame);  /* 清理硬件帧转换用的软件帧 */
     av_frame_free(&frame);
     return 0;
 }
@@ -1889,6 +2131,11 @@ int stream_component_open(FFPlayer *ffp, VideoState *is, int stream_index)
 
     if (ffp->fast)
         avctx->flags2 |= AV_CODEC_FLAG2_FAST;
+
+    /* 为视频解码器配置硬件加速 */
+    if (avctx->codec_type == AVMEDIA_TYPE_VIDEO) {
+        configure_hwaccel(ffp, avctx, codec);
+    }
 
     opts = filter_codec_opts(ffp->codec_opts, avctx->codec_id, ic, ic->streams[stream_index], codec);
     if (!av_dict_get(opts, "threads", NULL, 0))

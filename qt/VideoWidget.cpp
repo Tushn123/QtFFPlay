@@ -105,6 +105,17 @@ void VideoWidget::initUi()
             playerWidget->videoWidget()->setScaleMode(mode);
         }
     });
+    
+    // 标题栏硬件加速类型选择 -> 播放器（注意：需重新加载视频才能生效）
+    connect(videoTitleBarWidget, &VideoTitleBarWidget::hwAccelTypeChanged,
+            this, [this](PlayerWidget::HWAccelType type) {
+        QString typeName = PlayerWidget::hwAccelName(type);
+        qDebug() << "[VideoWidget] HWAccel type changed to:" << typeName;
+        playerWidget->setHWAccelType(type);
+        
+        // 注意：硬件加速类型改变后需要重新加载视频才能生效
+        // 这里可以选择自动重新加载或提示用户
+    });
 
     // 设置默认媒体文件
     QString mediaPath = "C:/shn/media/animal.mp4";
@@ -128,9 +139,12 @@ void VideoWidget::leaveEvent(QEvent* event) {
     // 如果有，则不隐藏工具栏（避免闪动）
     
     // 检查标题栏的下拉框状态
-    if (videoTitleBarWidget && videoTitleBarWidget->scaleModeCombo) {
+    if (videoTitleBarWidget) {
         QComboBox *scaleModeCombo = videoTitleBarWidget->scaleModeCombo;
-        if (scaleModeCombo->view() && scaleModeCombo->view()->isVisible()) {
+        QComboBox *hwAccelCombo = videoTitleBarWidget->hwAccelCombo;
+        
+        if ((scaleModeCombo && scaleModeCombo->view() && scaleModeCombo->view()->isVisible()) ||
+            (hwAccelCombo && hwAccelCombo->view() && hwAccelCombo->view()->isVisible())) {
             return;
         }
     }

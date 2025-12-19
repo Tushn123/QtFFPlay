@@ -30,6 +30,7 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_mp(nullptr)
     , m_initialized(false)
     , m_renderMode(RenderMode::OpenGL)  // 默认使用 OpenGL 渲染
+    , m_hwAccelType(HWAccelType::None)  // 默认软解码
     , m_videoWidget(nullptr)
     , m_layout(nullptr)
     , m_msgLoopRunning(false)
@@ -156,6 +157,10 @@ void PlayerWidget::initPlayer()
         mp_set_render_mode(m_mp, FFP_RENDER_MODE_SDL);
         qDebug() << "[PlayerWidget] Using SDL rendering";
     }
+    
+    // 设置硬件加速类型
+    mp_set_hwaccel_type(m_mp, static_cast<MPHWAccelType>(static_cast<int>(m_hwAccelType)));
+    qDebug() << "[PlayerWidget] HWAccel type:" << hwAccelName(m_hwAccelType);
     
     m_initialized = true;
     m_lastState = MP_STATE_IDLE;
@@ -789,4 +794,53 @@ void PlayerWidget::focusOutEvent(QFocusEvent *event)
     m_isPanning = false;
     setCursor(Qt::ArrowCursor);
     QWidget::focusOutEvent(event);
+}
+
+/*
+ * =============================================================================
+ * 硬件加速控制
+ * =============================================================================
+ */
+
+void PlayerWidget::setHWAccelType(HWAccelType type)
+{
+    m_hwAccelType = type;
+    
+    if (m_mp) {
+        mp_set_hwaccel_type(m_mp, static_cast<MPHWAccelType>(static_cast<int>(type)));
+        qDebug() << "[PlayerWidget] HWAccel type set to:" << hwAccelName(type);
+    }
+}
+
+PlayerWidget::HWAccelType PlayerWidget::hwAccelType() const
+{
+    return m_hwAccelType;
+}
+
+QList<std::tuple<PlayerWidget::HWAccelType, QString, bool>> PlayerWidget::availableHWAccels()
+{
+    QList<std::tuple<HWAccelType, QString, bool>> result;
+    
+    MPHWAccelInfo infos[MP_HWACCEL_COUNT];
+    int count = mp_get_available_hwaccels(infos, MP_HWACCEL_COUNT);
+    
+    for (int i = 0; i < count; i++) {
+        HWAccelType type = static_cast<HWAccelType>(static_cast<int>(infos[i].type));
+        QString name = QString::fromUtf8(infos[i].description);
+        bool available = infos[i].available != 0;
+        result.append(std::make_tuple(type, name, available));
+    }
+    
+    return result;
+}
+
+bool PlayerWidget::isHWAccelAvailable(HWAccelType type)
+{
+    return mp_is_hwaccel_available(static_cast<MPHWAccelType>(static_cast<int>(type))) != 0;
+}
+
+QString PlayerWidget::hwAccelName(HWAccelType type)
+{
+    const char *name = mp_get_hwaccel_name(static_cast<MPHWAccelType>(static_cast<int>(type)));
+    return QString::fromUtf8(name);
 }

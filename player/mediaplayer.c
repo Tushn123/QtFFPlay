@@ -1264,3 +1264,56 @@ void ffp_notify_msg3(FFPlayer *ffp, int what, int arg1, int arg2)
     msg_queue_put_simple3(ffp->ext_msg_queue, what, arg1, arg2);
 }
 
+/*
+ * =============================================================================
+ * 硬件加速控制
+ * =============================================================================
+ */
+
+void mp_set_hwaccel_type(MediaPlayer *mp, MPHWAccelType type)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    /* MPHWAccelType 与 FFPHWAccelType 值对应 */
+    ffp_set_hwaccel_type(mp->ffplayer, (FFPHWAccelType)type);
+    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] HWAccel type set to: %s\n",
+           mp_get_hwaccel_name(type));
+}
+
+MPHWAccelType mp_get_hwaccel_type(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return MP_HWACCEL_NONE;
+    
+    return (MPHWAccelType)ffp_get_hwaccel_type(mp->ffplayer);
+}
+
+int mp_get_available_hwaccels(MPHWAccelInfo *infos, int max_count)
+{
+    if (!infos || max_count <= 0)
+        return 0;
+    
+    FFPHWAccelInfo ffp_infos[FFP_HWACCEL_COUNT];
+    int count = ffp_get_available_hwaccels(ffp_infos, max_count);
+    
+    for (int i = 0; i < count; i++) {
+        infos[i].type = (MPHWAccelType)ffp_infos[i].type;
+        infos[i].name = ffp_infos[i].name;
+        infos[i].description = ffp_infos[i].description;
+        infos[i].available = ffp_infos[i].available;
+    }
+    
+    return count;
+}
+
+int mp_is_hwaccel_available(MPHWAccelType type)
+{
+    return ffp_is_hwaccel_available((FFPHWAccelType)type);
+}
+
+const char *mp_get_hwaccel_name(MPHWAccelType type)
+{
+    return ffp_get_hwaccel_name((FFPHWAccelType)type);
+}
+

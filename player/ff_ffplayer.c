@@ -175,6 +175,14 @@ void ffp_set_defaults(FFPlayer *ffp)
     ffp->playback_rate = 1.0f;
     ffp->playback_rate_changed = 0;
 
+    /* 硬件加速 */
+    ffp->hwaccel_type = FFP_HWACCEL_NONE;
+    ffp->hwaccel_device = NULL;
+    ffp->hw_device_ctx = NULL;
+    ffp->hw_pix_fmt = -1;  /* AV_PIX_FMT_NONE */
+    ffp->hwaccel_failed = 0;
+    ffp->hwaccel_retrieve_data = 1;  /* 默认需要从 GPU 拷贝到 CPU */
+
     /* 选项字典 */
     ffp->format_opts = NULL;
     ffp->codec_opts = NULL;
@@ -1278,4 +1286,137 @@ void ffp_set_video_frame_callback(FFPlayer *ffp, ffp_video_frame_callback cb, vo
     ffp->video_frame_cb = cb;
     ffp->video_frame_cb_opaque = opaque;
     av_log(NULL, AV_LOG_INFO, "[FFPlayer] Video frame callback set: cb=%p, opaque=%p\n", cb, opaque);
+}
+
+/*
+ * =============================================================================
+ * 硬件加速控制
+ * =============================================================================
+ */
+
+/* 硬件加速类型信息表 */
+static const struct {
+    FFPHWAccelType type;
+    enum AVHWDeviceType av_type;
+    const char *name;
+    const char *description;
+} hwaccel_table[] = {
+    { FFP_HWACCEL_NONE,          AV_HWDEVICE_TYPE_NONE,         "none",         "软件解码" },
+    { FFP_HWACCEL_AUTO,          AV_HWDEVICE_TYPE_NONE,         "auto",         "自动选择" },
+#ifdef _WIN32
+    { FFP_HWACCEL_DXVA2,         AV_HWDEVICE_TYPE_DXVA2,        "dxva2",        "DirectX VA 2.0" },
+    { FFP_HWACCEL_D3D11VA,       AV_HWDEVICE_TYPE_D3D11VA,      "d3d11va",      "Direct3D 11" },
+#endif
+    { FFP_HWACCEL_CUDA,          AV_HWDEVICE_TYPE_CUDA,         "cuda",         "NVIDIA CUDA" },
+#ifdef __linux__
+    { FFP_HWACCEL_VAAPI,         AV_HWDEVICE_TYPE_VAAPI,        "vaapi",        "Video Acceleration API" },
+    { FFP_HWACCEL_VDPAU,         AV_HWDEVICE_TYPE_VDPAU,        "vdpau",        "VDPAU" },
+#endif
+#ifdef __APPLE__
+    { FFP_HWACCEL_VIDEOTOOLBOX,  AV_HWDEVICE_TYPE_VIDEOTOOLBOX, "videotoolbox", "VideoToolbox" },
+#endif
+    { FFP_HWACCEL_QSV,           AV_HWDEVICE_TYPE_QSV,          "qsv",          "Intel Quick Sync" },
+};
+
+static const int hwaccel_table_size = sizeof(hwaccel_table) / sizeof(hwaccel_table[0]);
+
+/* 获取 FFmpeg 硬件设备类型 */
+enum AVHWDeviceType ffp_get_av_hwdevice_type(FFPHWAccelType type)
+{
+    for (int i = 0; i < hwaccel_table_size; i++) {
+        if (hwaccel_table[i].type == type) {
+            return hwaccel_table[i].av_type;
+        }
+    }
+    return AV_HWDEVICE_TYPE_NONE;
+}
+
+const char *ffp_get_hwaccel_name(FFPHWAccelType type)
+{
+    for (int i = 0; i < hwaccel_table_size; i++) {
+        if (hwaccel_table[i].type == type) {
+            return hwaccel_table[i].name;
+        }
+    }
+    return "unknown";
+}
+
+int ffp_is_hwaccel_available(FFPHWAccelType type)
+{
+    if (type == FFP_HWACCEL_NONE || type == FFP_HWACCEL_AUTO) {
+        return 1;
+    }
+
+    enum AVHWDeviceType av_type = ffp_get_av_hwdevice_type(type);
+    if (av_type == AV_HWDEVICE_TYPE_NONE) {
+        return 0;
+    }
+
+    /* 尝试创建临时硬件设备上下文来检测是否可用 */
+    AVBufferRef *hw_device_ctx = NULL;
+    int ret = av_hwdevice_ctx_create(&hw_device_ctx, av_type, NULL, NULL, 0);
+    
+    if (ret >= 0 && hw_device_ctx) {
+        av_buffer_unref(&hw_device_ctx);
+        av_log(NULL, AV_LOG_DEBUG, "[HWAccel] %s is available\n", 
+               ffp_get_hwaccel_name(type));
+        return 1;
+    }
+    
+    av_log(NULL, AV_LOG_DEBUG, "[HWAccel] %s is NOT available: %s\n", 
+           ffp_get_hwaccel_name(type), av_err2str(ret));
+    return 0;
+}
+
+int ffp_get_available_hwaccels(FFPHWAccelInfo *infos, int max_count)
+{
+    if (!infos || max_count <= 0) {
+        return 0;
+    }
+
+    int count = 0;
+
+    for (int i = 0; i < hwaccel_table_size && count < max_count; i++) {
+        FFPHWAccelType type = hwaccel_table[i].type;
+        int available = ffp_is_hwaccel_available(type);
+        
+        infos[count].type = type;
+        infos[count].name = hwaccel_table[i].name;
+        infos[count].description = hwaccel_table[i].description;
+        infos[count].available = available;
+        count++;
+    }
+
+    return count;
+}
+
+void ffp_set_hwaccel_type(FFPlayer *ffp, FFPHWAccelType type)
+{
+    if (!ffp) {
+        return;
+    }
+
+    /* 检查是否可用 */
+    if (type != FFP_HWACCEL_NONE && type != FFP_HWACCEL_AUTO) {
+        if (!ffp_is_hwaccel_available(type)) {
+            av_log(NULL, AV_LOG_WARNING, 
+                   "[HWAccel] %s is not available, falling back to software decoding\n",
+                   ffp_get_hwaccel_name(type));
+            type = FFP_HWACCEL_NONE;
+        }
+    }
+
+    ffp->hwaccel_type = type;
+    ffp->hwaccel_failed = 0;
+    
+    av_log(NULL, AV_LOG_INFO, "[HWAccel] Set hwaccel type to: %s\n", 
+           ffp_get_hwaccel_name(type));
+}
+
+FFPHWAccelType ffp_get_hwaccel_type(FFPlayer *ffp)
+{
+    if (!ffp) {
+        return FFP_HWACCEL_NONE;
+    }
+    return ffp->hwaccel_type;
 }
