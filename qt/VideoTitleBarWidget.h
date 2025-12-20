@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QComboBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QHBoxLayout>
 #include "VideoGLWidget.h"
 
@@ -29,11 +30,19 @@ signals:
      * 缩放模式改变信号
      */
     void scaleModeChanged(ScaleMode mode);
+    
+    /**
+     * 打开文件信号
+     * @param filePath 用户选择的文件路径
+     */
+    void openFileRequested(const QString &filePath);
 
 private slots:
     void onScaleModeComboChanged(int index);
+    void onOpenButtonClicked();
 
 public:
+    QPushButton *openButton;
     QComboBox *scaleModeCombo;
 
 private:

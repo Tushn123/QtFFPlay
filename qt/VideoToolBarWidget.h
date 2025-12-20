@@ -142,6 +142,7 @@ signals:
     void playPauseClicked();         // 播放/暂停切换
     void stepForwardClicked();       // 逐帧正放
     void forwardClicked();           // 正放
+    void stopClicked();              // 停止（关闭视频释放资源）
     
     // 播放状态信号
     void playStateChanged(bool playing, PlayDirection direction);  // 播放状态改变
@@ -192,6 +193,7 @@ public:
     QPushButton *playPauseButton;
     QPushButton *forwardButton;
     QPushButton *stepForwardButton;
+    QPushButton *stopButton;
 
     // 下方区域右侧控件
     QPushButton *volumeButton;

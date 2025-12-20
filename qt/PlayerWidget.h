@@ -69,6 +69,17 @@ public:
     // 音量控制
     void setVolume(int volume);  // 0-100
     int volume() const;
+    
+    // 循环播放控制
+    /**
+     * 设置循环播放次数
+     * @param count 循环次数：
+     *   - 0: 不循环，播放一次后自动停止并释放所有资源
+     *   - 1: 循环1次（总共播放2次），然后自动停止
+     *   - n: 循环n次（总共播放n+1次），然后自动停止
+     */
+    void setLoopCount(int count);
+    int loopCount() const { return m_loopCount; }
 
     // 获取 OpenGL 渲染组件
     VideoGLWidget* videoWidget() const { return m_videoWidget; }
@@ -193,6 +204,10 @@ private:
     
     // 播放标志：如果在准备阶段调用 play()，准备完成后自动播放
     bool m_startOnPrepared;
+    
+    // 循环播放
+    int m_loopCount;           // 循环次数：0=不循环，1=播放一次，n>1=循环n次
+    int m_currentLoopIndex;    // 当前循环索引（用于计数）
     
     // 播放位置更新定时器
     QTimer *m_positionTimer;

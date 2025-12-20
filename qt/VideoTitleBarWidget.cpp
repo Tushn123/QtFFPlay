@@ -1,4 +1,6 @@
 #include "VideoTitleBarWidget.h"
+#include <QFileDialog>
+#include <QStandardPaths>
 
 // 下拉框通用样式
 static const char* comboBoxStyle = R"(
@@ -78,6 +80,26 @@ void VideoTitleBarWidget::initUI()
         }
     )");
     
+    // 打开文件按钮
+    openButton = new QPushButton("📂 打开", this);
+    openButton->setFixedSize(70, 26);
+    openButton->setToolTip("打开视频文件");
+    openButton->setStyleSheet(R"(
+        QPushButton {
+            background-color: #0066cc;
+            color: white;
+            border: 1px solid #0055aa;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #0077dd;
+        }
+        QPushButton:pressed {
+            background-color: #0055bb;
+        }
+    )");
+    
     // 缩放模式下拉框
     scaleModeCombo = new QComboBox(this);
     scaleModeCombo->setFixedWidth(90);
@@ -90,6 +112,7 @@ void VideoTitleBarWidget::initUI()
     
     // 添加到布局
     mainLayout->addWidget(titleLabel);
+    mainLayout->addWidget(openButton);
     mainLayout->addStretch();
     mainLayout->addWidget(scaleModeCombo);
 }
@@ -98,12 +121,34 @@ void VideoTitleBarWidget::initConnect()
 {
     connect(scaleModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &VideoTitleBarWidget::onScaleModeComboChanged);
+    connect(openButton, &QPushButton::clicked,
+            this, &VideoTitleBarWidget::onOpenButtonClicked);
 }
 
 void VideoTitleBarWidget::onScaleModeComboChanged(int index)
 {
     ScaleMode mode = static_cast<ScaleMode>(scaleModeCombo->itemData(index).toInt());
     emit scaleModeChanged(mode);
+}
+
+void VideoTitleBarWidget::onOpenButtonClicked()
+{
+    // 获取默认目录（视频文件夹或上次打开的目录）
+    QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    
+    // 打开文件选择对话框
+    QString filePath = QFileDialog::getOpenFileName(
+        this,
+        "打开视频文件",
+        defaultDir,
+        "视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.m4v *.ts *.m2ts);;"
+        "所有文件 (*.*)"
+    );
+    
+    // 如果用户选择了文件
+    if (!filePath.isEmpty()) {
+        emit openFileRequested(filePath);
+    }
 }
 
 void VideoTitleBarWidget::setScaleMode(ScaleMode mode)

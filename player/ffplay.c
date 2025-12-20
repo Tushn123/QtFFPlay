@@ -2573,11 +2573,14 @@ int read_thread(void *arg)
         if (!is->paused &&
             (!is->audio_st || (is->auddec.finished == is->audioq.serial && frame_queue_nb_remaining(&is->sampq) == 0)) &&
             (!is->video_st || (is->viddec.finished == is->videoq.serial && frame_queue_nb_remaining(&is->pictq) == 0))) {
+            /* 所有音视频帧已播放完毕 */
             if (ffp->loop != 1 && (!ffp->loop || --ffp->loop)) {
+                /* 需要循环：seek 到开头继续播放 */
                 stream_seek(is, ffp->start_time != AV_NOPTS_VALUE ? ffp->start_time : 0, 0, 0);
-            } else if (ffp->autoexit) {
-                ret = AVERROR_EOF;
-                goto fail;
+            } else {
+                /* 不需要循环：播放结束，退出 read_thread */
+                av_log(NULL, AV_LOG_INFO, "[READ_THREAD] Playback finished, exiting\n");
+                break;  /* 跳出 for 循环，发送 FFP_MSG_COMPLETED */
             }
         }
         ret = av_read_frame(ic, pkt);

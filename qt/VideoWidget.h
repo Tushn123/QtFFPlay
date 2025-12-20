@@ -17,6 +17,12 @@ public:
     int getId() const;
     void setId(int newId);
     void updateBarPosition();
+    
+    /**
+     * 完全停止播放并重置所有控件状态
+     * 包括：停止播放器、清空画面、重置工具栏进度/时长/状态
+     */
+    void stopAndReset();
 
 signals:
 

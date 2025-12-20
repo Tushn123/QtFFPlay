@@ -96,6 +96,14 @@ void VideoWidget::initUi()
         playerWidget->setVolume(volume);
     });
     
+    // 工具栏停止按钮 -> 停止播放并释放资源
+    connect(videoToolBarWidget, &VideoToolBarWidget::stopClicked,
+            this, &VideoWidget::stopAndReset);
+    
+    // 播放完成信号 -> 停止播放并释放资源
+    connect(playerWidget, &PlayerWidget::completed,
+            this, &VideoWidget::stopAndReset);
+    
     // 标题栏缩放模式选择 -> 视频渲染组件
     connect(videoTitleBarWidget, &VideoTitleBarWidget::scaleModeChanged,
             this, [this](ScaleMode mode) {
@@ -105,8 +113,21 @@ void VideoWidget::initUi()
             playerWidget->videoWidget()->setScaleMode(mode);
         }
     });
+    
+    // 标题栏打开文件按钮 -> 播放新视频
+    connect(videoTitleBarWidget, &VideoTitleBarWidget::openFileRequested,
+            this, [this](const QString &filePath) {
+        qDebug() << "[VideoWidget] Open file requested:" << filePath;
+        // 重置工具栏状态
+        videoToolBarWidget->setPlaying(false);
+        videoToolBarWidget->setCurrentTime(0);
+        videoToolBarWidget->setProgress(0);
+        // 设置新媒体并播放（setMedia 内部会自动重置播放器状态）
+        playerWidget->setMedia(filePath);
+        playerWidget->play();
+    });
 
-    // 设置默认媒体文件
+    // 设置默认媒体文件（可选：启动时自动播放）
     QString mediaPath = "C:/shn/media/animal.mp4";
     playerWidget->setMedia(mediaPath);
     playerWidget->play();
@@ -193,5 +214,23 @@ void VideoWidget::updateBarPosition()
             width(),
             videoToolBarWidget->height()
             );
+    }
+}
+
+void VideoWidget::stopAndReset()
+{
+    qDebug() << "[VideoWidget] stopAndReset - full cleanup";
+    
+    // 1. 停止播放器并释放所有资源
+    if (playerWidget) {
+        playerWidget->stop();
+    }
+    
+    // 2. 重置工具栏状态
+    if (videoToolBarWidget) {
+        videoToolBarWidget->setPlaying(false);
+        videoToolBarWidget->setCurrentTime(0);
+        videoToolBarWidget->setDuration(0);
+        videoToolBarWidget->setProgress(0);
     }
 }

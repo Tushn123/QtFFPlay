@@ -518,12 +518,33 @@ void VideoToolBarWidget::initUI()
         }
     )");
 
+    // 停止按钮
+    stopButton = new QPushButton("■", this);
+    stopButton->setFixedSize(30, 30);
+    stopButton->setToolTip("停止");
+    stopButton->setStyleSheet(R"(
+        QPushButton {
+            background-color: #cc3333;
+            color: white;
+            border: 1px solid #aa2222;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        QPushButton:hover {
+            background-color: #dd4444;
+        }
+        QPushButton:pressed {
+            background-color: #bb2222;
+        }
+    )");
+
     // 添加左侧控件
     leftControlLayout->addWidget(stepBackwardButton);
     leftControlLayout->addWidget(backwardButton);
     leftControlLayout->addWidget(playPauseButton);
     leftControlLayout->addWidget(forwardButton);
     leftControlLayout->addWidget(stepForwardButton);
+    leftControlLayout->addWidget(stopButton);
 
     // 中间：弹簧，实现两端对齐
     QSpacerItem *horizontalSpacer = new QSpacerItem(40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum);
@@ -558,7 +579,7 @@ void VideoToolBarWidget::initUI()
     volumePopup->hide();
 
     speedCombo = new QComboBox(this);
-    speedCombo->setFixedWidth(80);
+    speedCombo->setFixedWidth(60);
     speedCombo->setStyleSheet(R"(
         QComboBox {
             background-color: #333333;
@@ -589,7 +610,7 @@ void VideoToolBarWidget::initUI()
     speedCombo->setCurrentIndex(2);
 
     resolutionCombo = new QComboBox(this);
-    resolutionCombo->setFixedWidth(100);
+    resolutionCombo->setFixedWidth(70);
     resolutionCombo->setStyleSheet(R"(
         QComboBox {
             background-color: #333333;
@@ -644,6 +665,7 @@ void VideoToolBarWidget::initConnect()
     connect(playPauseButton, &QPushButton::clicked, this, &VideoToolBarWidget::onPlayPauseClicked);
     connect(forwardButton, &QPushButton::clicked, this, &VideoToolBarWidget::onForwardClicked);
     connect(stepForwardButton, &QPushButton::clicked, this, &VideoToolBarWidget::stepForwardClicked);
+    connect(stopButton, &QPushButton::clicked, this, &VideoToolBarWidget::stopClicked);
 
     // 进度条
     connect(progressSlider, &QSlider::valueChanged, this, &VideoToolBarWidget::onProgressSliderChanged);

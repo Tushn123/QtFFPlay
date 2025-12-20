@@ -58,6 +58,8 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_msgLoopRunning(false)
     , m_lastState(MP_STATE_IDLE)
     , m_startOnPrepared(false)
+    , m_loopCount(0)           // 默认不循环
+    , m_currentLoopIndex(0)
     , m_positionTimer(nullptr)
     , m_lastPosition(0)
     , m_spacePressed(false)
@@ -236,15 +238,30 @@ void PlayerWidget::setMedia(const QString &path)
     m_mediaPath = path;
     qDebug() << "setMedia:" << path;
     
-    // 重置自动播放标志
+    // 重置自动播放标志和循环计数
     m_startOnPrepared = false;
+    m_currentLoopIndex = 0;
     
     // 清除之前的视频帧
     if (m_videoWidget) {
         m_videoWidget->clearFrame();
     }
     
-    // 确保播放器已初始化
+    // 如果已有播放器，完全销毁并重建（确保所有状态干净）
+    if (m_mp) {
+        qDebug() << "[PlayerWidget] Destroying existing MediaPlayer for clean restart";
+        
+        // 停止消息循环
+        stopMessageLoop();
+        
+        // 销毁旧的 MediaPlayer
+        mp_shutdown(m_mp);
+        mp_dec_ref_p(&m_mp);
+        m_mp = nullptr;
+        m_initialized = false;
+    }
+    
+    // 重新初始化播放器
     initPlayer();
     
     if (!m_mp) {
@@ -321,10 +338,33 @@ void PlayerWidget::pause()
 
 void PlayerWidget::stop()
 {
-    if (m_mp) {
-        int ret = mp_stop(m_mp);
-        qDebug() << "mp_stop returned:" << ret << ", state:" << mp_get_state(m_mp);
+    qDebug() << "[PlayerWidget] stop() called - full cleanup";
+    
+    // 停止位置更新定时器
+    if (m_positionTimer) {
+        m_positionTimer->stop();
     }
+    
+    // 停止消息循环
+    stopMessageLoop();
+    
+    // 销毁 MediaPlayer，释放所有资源
+    if (m_mp) {
+        mp_shutdown(m_mp);
+        mp_dec_ref_p(&m_mp);
+        m_mp = nullptr;
+    }
+    
+    // 清除视频显示
+    if (m_videoWidget) {
+        m_videoWidget->clearFrame();
+    }
+    
+    // 重置初始化标志（下次 setMedia 会重新初始化）
+    m_initialized = false;
+    m_mediaPath.clear();
+    
+    qDebug() << "[PlayerWidget] stop() complete - all resources released";
 }
 
 void PlayerWidget::togglePause()
@@ -478,6 +518,13 @@ int PlayerWidget::volume() const
     return 100;
 }
 
+void PlayerWidget::setLoopCount(int count)
+{
+    m_loopCount = count;
+    m_currentLoopIndex = 0;
+    qDebug() << "[PlayerWidget] Loop count set to:" << count;
+}
+
 /*
  * =============================================================================
  * 消息循环线程实现 - 参考 ijkplayer 的 message_loop_n
@@ -596,8 +643,28 @@ void PlayerWidget::onMessage(int what, int arg1, int arg2)
         break;
         
     case FFP_MSG_COMPLETED:
-        qDebug() << "[MSG] COMPLETED";
-        emit completed();
+        qDebug() << "[MSG] COMPLETED - loopCount:" << m_loopCount << ", currentLoopIndex:" << m_currentLoopIndex;
+        
+        // 检查是否需要继续循环
+        // loopCount=0: 不循环，播放1次
+        // loopCount=1: 循环1次，总共播放2次
+        // loopCount=n: 循环n次，总共播放n+1次
+        if (m_loopCount > 0 && m_currentLoopIndex < m_loopCount) {
+            m_currentLoopIndex++;
+            qDebug() << "[MSG] Loop" << m_currentLoopIndex << "/" << m_loopCount 
+                     << "- restarting from beginning (total plays:" << (m_currentLoopIndex + 1) << ")";
+            if (m_mp) {
+                seekTo(0);
+                play();
+            }
+            break;  // 继续循环，不停止
+        }
+        
+        // 播放结束（不循环 或 循环已完成）
+        // 发送 completed 信号，由上层 VideoWidget 统一处理停止和 UI 重置
+        qDebug() << "[MSG] Playback finished - total plays:" << (m_currentLoopIndex + 1);
+        m_currentLoopIndex = 0;  // 重置循环计数
+        emit completed();  // 上层 VideoWidget::stopAndReset() 会处理 stop() 和 UI 重置
         break;
         
     case FFP_MSG_VIDEO_SIZE_CHANGED:
