@@ -25,12 +25,34 @@ extern "C" {
 }
 #undef class
 
+/*
+ * =============================================================================
+ * 硬件加速配置（唯一入口）
+ * =============================================================================
+ * PlayerWidget 是硬件加速类型的唯一配置入口。
+ * 底层 FFPlayer/MediaPlayer 只提供接口，不设置默认值。
+ * 
+ * 修改下方 m_hwAccelType 的值来切换解码方式：
+ *   - HWAccelType::None         软解码（CPU 解码）
+ *   - HWAccelType::D3D11VA      Windows 硬解码（推荐）
+ *   - HWAccelType::VideoToolbox macOS 硬解码（推荐）
+ *   - HWAccelType::VAAPI        Linux 硬解码（推荐）
+ *   - HWAccelType::Auto         自动选择
+ */
 PlayerWidget::PlayerWidget(QWidget *parent)
     : QWidget(parent)
     , m_mp(nullptr)
     , m_initialized(false)
-    , m_renderMode(RenderMode::OpenGL)  // 默认使用 OpenGL 渲染
-    , m_hwAccelType(HWAccelType::None)  // 默认软解码
+    , m_renderMode(RenderMode::OpenGL)
+#if defined(_WIN32)
+    , m_hwAccelType(HWAccelType::D3D11VA)  // ← Windows: 修改此处切换解码方式
+#elif defined(__APPLE__)
+    , m_hwAccelType(HWAccelType::VideoToolbox)  // ← macOS: 修改此处切换解码方式
+#elif defined(__linux__)
+    , m_hwAccelType(HWAccelType::VAAPI)  // ← Linux: 修改此处切换解码方式
+#else
+    , m_hwAccelType(HWAccelType::Auto)
+#endif
     , m_videoWidget(nullptr)
     , m_layout(nullptr)
     , m_msgLoopRunning(false)
@@ -807,6 +829,7 @@ void PlayerWidget::setHWAccelType(HWAccelType type)
     m_hwAccelType = type;
     
     if (m_mp) {
+        // 设置硬解码类型，下次打开文件时生效
         mp_set_hwaccel_type(m_mp, static_cast<MPHWAccelType>(static_cast<int>(type)));
         qDebug() << "[PlayerWidget] HWAccel type set to:" << hwAccelName(type);
     }

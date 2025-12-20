@@ -64,9 +64,17 @@ typedef enum FFPRenderMode {
 
 /**
  * 硬件加速类型枚举
+ * 
+ * 注意：FFPlayer 层不设置默认硬件加速类型，默认为 FFP_HWACCEL_NONE（软解码）。
+ * 上层应用（如 PlayerWidget）负责根据平台选择合适的硬件加速类型。
+ * 
+ * 平台推荐：
+ *   - Windows: FFP_HWACCEL_D3D11VA
+ *   - macOS:   FFP_HWACCEL_VIDEOTOOLBOX  
+ *   - Linux:   FFP_HWACCEL_VAAPI
  */
 typedef enum FFPHWAccelType {
-    FFP_HWACCEL_NONE = 0,          /* 软解码（默认）*/
+    FFP_HWACCEL_NONE = 0,          /* 软解码 */
     FFP_HWACCEL_AUTO,              /* 自动选择最佳硬件加速 */
     FFP_HWACCEL_DXVA2,             /* Windows DXVA2 */
     FFP_HWACCEL_D3D11VA,           /* Windows D3D11 Video Acceleration */
@@ -699,5 +707,14 @@ int ffp_is_hwaccel_available(FFPHWAccelType type);
  * @return 名称字符串
  */
 const char *ffp_get_hwaccel_name(FFPHWAccelType type);
+
+/**
+ * 动态切换硬件加速类型（播放中切换）
+ * 会关闭当前视频流，切换硬解码设置，重新打开视频流，并 seek 回原位置
+ * @param ffp FFPlayer 实例
+ * @param type 目标硬件加速类型
+ * @return 0=成功, <0=失败
+ */
+int ffp_switch_hwaccel(FFPlayer *ffp, FFPHWAccelType type);
 
 #endif /* FF_FFPLAYER_H */

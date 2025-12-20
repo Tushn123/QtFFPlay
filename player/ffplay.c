@@ -49,6 +49,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
     FFPlayer *ffp = (FFPlayer *)ctx->opaque;
     const enum AVPixelFormat *p;
 
+    /* 首先尝试找到硬件格式 */
     for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
         if (*p == ffp->hw_pix_fmt) {
             av_log(NULL, AV_LOG_INFO, "[HWAccel] Using hardware pixel format: %s\n",
@@ -57,8 +58,18 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
         }
     }
 
-    av_log(NULL, AV_LOG_WARNING, "[HWAccel] Hardware format not available, using software\n");
+    /* 硬件格式不可用，回退到第一个软件格式 */
+    av_log(NULL, AV_LOG_WARNING, "[HWAccel] Hardware format %s not in list, falling back to software\n",
+           av_get_pix_fmt_name(ffp->hw_pix_fmt));
     ffp->hwaccel_failed = 1;
+    
+    /* 返回列表中的第一个有效格式（通常是软件格式）*/
+    if (pix_fmts[0] != AV_PIX_FMT_NONE) {
+        av_log(NULL, AV_LOG_INFO, "[HWAccel] Fallback to: %s\n",
+               av_get_pix_fmt_name(pix_fmts[0]));
+        return pix_fmts[0];
+    }
+    
     return AV_PIX_FMT_NONE;
 }
 
@@ -196,6 +207,7 @@ static int configure_hwaccel(FFPlayer *ffp, AVCodecContext *avctx, const AVCodec
                "[HWAccel] Failed to init %s, falling back to software\n",
                ffp_get_hwaccel_name(hwaccel_type));
         ffp->hwaccel_failed = 1;
+        ffp->hw_pix_fmt = AV_PIX_FMT_NONE;  /* 重置，避免错误的帧格式判断 */
         return 0;
     }
 
@@ -1598,12 +1610,24 @@ int video_thread(void *arg)
     if (!frame)
         return AVERROR(ENOMEM);
 
+    int first_frame_logged = 0;
+    
     for (;;) {
         ret = get_video_frame(ffp, is, frame);
         if (ret < 0)
             goto the_end;
         if (!ret)
             continue;
+
+        /* 首帧日志：显示解码帧格式，帮助诊断 */
+        if (!first_frame_logged) {
+            av_log(NULL, AV_LOG_INFO, 
+                   "[VideoThread] First frame: format=%s (%d), hw_pix_fmt=%s (%d), hwaccel_failed=%d\n",
+                   av_get_pix_fmt_name(frame->format), frame->format,
+                   av_get_pix_fmt_name(ffp->hw_pix_fmt), ffp->hw_pix_fmt,
+                   ffp->hwaccel_failed);
+            first_frame_logged = 1;
+        }
 
         /* 
          * 硬件帧处理：
@@ -1628,6 +1652,14 @@ int video_thread(void *arg)
                 /* 继续使用原始帧（可能无法正确显示）*/
             } else {
                 display_frame = sw_frame;
+                /* 
+                 * 关键修复：立即释放硬件帧引用！
+                 * hw_frame_to_sw 已将数据复制到 sw_frame，原始的 frame 仍然持有
+                 * D3D11VA 表面的引用。如果不释放，当 av_buffersink_get_frame_flags
+                 * 覆写 frame 时，硬件表面引用会泄漏，最终导致 
+                 * "Static surface pool size exceeded" 错误。
+                 */
+                av_frame_unref(frame);
             }
         }
 
@@ -2134,7 +2166,11 @@ int stream_component_open(FFPlayer *ffp, VideoState *is, int stream_index)
 
     /* 为视频解码器配置硬件加速 */
     if (avctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-        configure_hwaccel(ffp, avctx, codec);
+        av_log(NULL, AV_LOG_INFO, "[HWAccel] Attempting to configure hwaccel, type=%d (%s)\n",
+               ffp->hwaccel_type, ffp_get_hwaccel_name(ffp->hwaccel_type));
+        int hwaccel_ret = configure_hwaccel(ffp, avctx, codec);
+        av_log(NULL, AV_LOG_INFO, "[HWAccel] Configure result: %s, hw_pix_fmt=%d, hwaccel_failed=%d\n",
+               hwaccel_ret ? "SUCCESS" : "FALLBACK_TO_SW", ffp->hw_pix_fmt, ffp->hwaccel_failed);
     }
 
     opts = filter_codec_opts(ffp->codec_opts, avctx->codec_id, ic, ic->streams[stream_index], codec);

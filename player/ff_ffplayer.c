@@ -175,7 +175,7 @@ void ffp_set_defaults(FFPlayer *ffp)
     ffp->playback_rate = 1.0f;
     ffp->playback_rate_changed = 0;
 
-    /* 硬件加速 */
+    /* 硬件加速 - 默认软解码，由上层（PlayerWidget）设置具体类型 */
     ffp->hwaccel_type = FFP_HWACCEL_NONE;
     ffp->hwaccel_device = NULL;
     ffp->hw_device_ctx = NULL;
@@ -1419,4 +1419,105 @@ FFPHWAccelType ffp_get_hwaccel_type(FFPlayer *ffp)
         return FFP_HWACCEL_NONE;
     }
     return ffp->hwaccel_type;
+}
+
+int ffp_switch_hwaccel(FFPlayer *ffp, FFPHWAccelType type)
+{
+    if (!ffp || !ffp->is) {
+        av_log(NULL, AV_LOG_ERROR, "[HWAccel] Cannot switch: player not initialized\n");
+        return -1;
+    }
+
+    VideoState *is = ffp->is;
+    
+    /* 检查是否有视频流 */
+    if (is->video_stream < 0) {
+        av_log(NULL, AV_LOG_WARNING, "[HWAccel] No video stream to switch\n");
+        return -1;
+    }
+
+    /* 检查是否需要切换 */
+    if (type == ffp->hwaccel_type) {
+        av_log(NULL, AV_LOG_INFO, "[HWAccel] Already using %s\n", ffp_get_hwaccel_name(type));
+        return 0;
+    }
+
+    /* 检查新类型是否可用 */
+    if (type != FFP_HWACCEL_NONE && type != FFP_HWACCEL_AUTO) {
+        if (!ffp_is_hwaccel_available(type)) {
+            av_log(NULL, AV_LOG_WARNING, 
+                   "[HWAccel] %s is not available\n", ffp_get_hwaccel_name(type));
+            return -1;
+        }
+    }
+
+    av_log(NULL, AV_LOG_INFO, "[HWAccel] Switching from %s to %s\n",
+           ffp_get_hwaccel_name(ffp->hwaccel_type), ffp_get_hwaccel_name(type));
+
+    /* 1. 记录当前播放位置和暂停状态 */
+    double current_pos = get_master_clock(is);
+    int was_paused = is->paused;
+    int video_stream_index = is->video_stream;
+    
+    if (isnan(current_pos)) {
+        current_pos = (double)is->seek_pos / AV_TIME_BASE;
+    }
+    
+    av_log(NULL, AV_LOG_INFO, "[HWAccel] Current position: %.3f sec, paused: %d\n", 
+           current_pos, was_paused);
+
+    /* 2. 暂停播放（如果正在播放） */
+    if (!was_paused) {
+        toggle_pause(is);
+    }
+
+    /* 3. 关闭当前视频流 */
+    stream_component_close(ffp, is, video_stream_index);
+    
+    /* 4. 释放旧的硬件设备上下文 */
+    if (ffp->hw_device_ctx) {
+        av_buffer_unref(&ffp->hw_device_ctx);
+        ffp->hw_device_ctx = NULL;
+    }
+
+    /* 5. 设置新的硬件加速类型 */
+    ffp->hwaccel_type = type;
+    ffp->hwaccel_failed = 0;
+    ffp->hw_pix_fmt = AV_PIX_FMT_NONE;
+
+    /* 6. 重新打开视频流（会使用新的硬解码设置） */
+    int ret = stream_component_open(ffp, is, video_stream_index);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[HWAccel] Failed to reopen video stream\n");
+        /* 尝试回退到软解码 */
+        if (type != FFP_HWACCEL_NONE) {
+            av_log(NULL, AV_LOG_WARNING, "[HWAccel] Falling back to software decoding\n");
+            ffp->hwaccel_type = FFP_HWACCEL_NONE;
+            ffp->hwaccel_failed = 1;
+            ret = stream_component_open(ffp, is, video_stream_index);
+        }
+        if (ret < 0) {
+            return -1;
+        }
+    }
+
+    /* 7. Seek 回原来的位置 */
+    if (current_pos > 0) {
+        int64_t seek_pos = (int64_t)(current_pos * AV_TIME_BASE);
+        if (is->ic->start_time != AV_NOPTS_VALUE) {
+            seek_pos += is->ic->start_time;
+        }
+        stream_seek(is, seek_pos, 0, 0);
+        av_log(NULL, AV_LOG_INFO, "[HWAccel] Seeking back to position: %.3f sec\n", current_pos);
+    }
+
+    /* 8. 恢复播放状态 */
+    if (!was_paused && is->paused) {
+        toggle_pause(is);
+    }
+
+    av_log(NULL, AV_LOG_INFO, "[HWAccel] Switch completed: now using %s\n",
+           ffp_get_hwaccel_name(ffp->hwaccel_type));
+    
+    return 0;
 }

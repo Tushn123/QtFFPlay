@@ -1317,3 +1317,15 @@ const char *mp_get_hwaccel_name(MPHWAccelType type)
     return ffp_get_hwaccel_name((FFPHWAccelType)type);
 }
 
+int mp_switch_hwaccel(MediaPlayer *mp, MPHWAccelType type)
+{
+    if (!mp || !mp->ffplayer) {
+        return -1;
+    }
+    
+    av_log(NULL, AV_LOG_INFO, "[MediaPlayer] Switching hwaccel to: %s\n",
+           mp_get_hwaccel_name(type));
+    
+    return ffp_switch_hwaccel(mp->ffplayer, (FFPHWAccelType)type);
+}
+

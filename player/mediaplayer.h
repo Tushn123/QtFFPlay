@@ -732,6 +732,14 @@ int mp_is_hwaccel_available(MPHWAccelType type);
  */
 const char *mp_get_hwaccel_name(MPHWAccelType type);
 
+/**
+ * 动态切换硬件加速类型（播放中切换）
+ * @param mp MediaPlayer 实例
+ * @param type 目标硬件加速类型
+ * @return 0=成功, <0=失败
+ */
+int mp_switch_hwaccel(MediaPlayer *mp, MPHWAccelType type);
+
 #ifdef __cplusplus
 }
 #endif
