@@ -453,7 +453,6 @@ bool VolumePopup::eventFilter(QObject *watched, QEvent *event)
 VideoToolBarWidget::VideoToolBarWidget(QWidget *parent)
     : QWidget{parent}
     , isPlaying_(false)
-    , direction_(Forward)  // 默认正放方向
     , currentTime_(0)
     , duration_(0)
     , volume_(0)
@@ -507,44 +506,6 @@ void VideoToolBarWidget::initUI()
     QHBoxLayout *leftControlLayout = new QHBoxLayout();
     leftControlLayout->setSpacing(5);
 
-    // 逐帧倒放按钮
-    stepBackwardButton = new QPushButton("<<", this);
-    stepBackwardButton->setFixedSize(30, 30);
-    stepBackwardButton->setToolTip("逐帧倒放");
-    stepBackwardButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #333333;
-            color: white;
-            border: 1px solid #555555;
-            border-radius: 4px;
-        }
-        QPushButton:hover {
-            background-color: #444444;
-        }
-        QPushButton:pressed {
-            background-color: #222222;
-        }
-    )");
-
-    // 倒放按钮
-    backwardButton = new QPushButton("|<", this);
-    backwardButton->setFixedSize(30, 30);
-    backwardButton->setToolTip("倒放");
-    backwardButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #333333;
-            color: white;
-            border: 1px solid #555555;
-            border-radius: 4px;
-        }
-        QPushButton:hover {
-            background-color: #444444;
-        }
-        QPushButton:pressed {
-            background-color: #222222;
-        }
-    )");
-
     // 播放/暂停按钮
     playPauseButton = new QPushButton("▶", this);
     playPauseButton->setFixedSize(40, 30);
@@ -561,25 +522,6 @@ void VideoToolBarWidget::initUI()
         }
         QPushButton:pressed {
             background-color: #0055bb;
-        }
-    )");
-
-    // 正放按钮
-    forwardButton = new QPushButton(">|", this);
-    forwardButton->setFixedSize(30, 30);
-    forwardButton->setToolTip("正放");
-    forwardButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #333333;
-            color: white;
-            border: 1px solid #555555;
-            border-radius: 4px;
-        }
-        QPushButton:hover {
-            background-color: #444444;
-        }
-        QPushButton:pressed {
-            background-color: #222222;
         }
     )");
 
@@ -623,10 +565,7 @@ void VideoToolBarWidget::initUI()
     )");
 
     // 添加左侧控件
-    leftControlLayout->addWidget(stepBackwardButton);
-    leftControlLayout->addWidget(backwardButton);
     leftControlLayout->addWidget(playPauseButton);
-    leftControlLayout->addWidget(forwardButton);
     leftControlLayout->addWidget(stepForwardButton);
     leftControlLayout->addWidget(stopButton);
 
@@ -744,10 +683,7 @@ void VideoToolBarWidget::initUI()
 void VideoToolBarWidget::initConnect()
 {
     // 播放控制按钮
-    connect(stepBackwardButton, &QPushButton::clicked, this, &VideoToolBarWidget::stepBackwardClicked);
-    connect(backwardButton, &QPushButton::clicked, this, &VideoToolBarWidget::onBackwardClicked);
     connect(playPauseButton, &QPushButton::clicked, this, &VideoToolBarWidget::onPlayPauseClicked);
-    connect(forwardButton, &QPushButton::clicked, this, &VideoToolBarWidget::onForwardClicked);
     connect(stepForwardButton, &QPushButton::clicked, this, &VideoToolBarWidget::stepForwardClicked);
     connect(stopButton, &QPushButton::clicked, this, &VideoToolBarWidget::stopClicked);
 
@@ -857,17 +793,6 @@ bool VideoToolBarWidget::isPlaying() const
     return isPlaying_;
 }
 
-void VideoToolBarWidget::setPlayDirection(PlayDirection direction)
-{
-    direction_ = direction;
-    updatePlayButtons();
-}
-
-VideoToolBarWidget::PlayDirection VideoToolBarWidget::playDirection() const
-{
-    return direction_;
-}
-
 void VideoToolBarWidget::updatePlayButtons()
 {
     // 更新播放/暂停按钮
@@ -877,41 +802,6 @@ void VideoToolBarWidget::updatePlayButtons()
     } else {
         playPauseButton->setText("▶");
         playPauseButton->setToolTip("播放");
-    }
-    
-    // 更新正放/倒放按钮高亮状态
-    QString normalStyle = R"(
-        QPushButton {
-            background-color: #333333;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #444444;
-        }
-    )";
-    
-    QString activeStyle = R"(
-        QPushButton {
-            background-color: #0066cc;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #0077dd;
-        }
-    )";
-    
-    if (direction_ == Forward) {
-        forwardButton->setStyleSheet(activeStyle);
-        backwardButton->setStyleSheet(normalStyle);
-    } else {
-        forwardButton->setStyleSheet(normalStyle);
-        backwardButton->setStyleSheet(activeStyle);
     }
 }
 
@@ -973,56 +863,7 @@ void VideoToolBarWidget::onPlayPauseClicked()
 {
     isPlaying_ = !isPlaying_;
     setPlaying(isPlaying_);
-    
-    // 发送具体的状态信号
-    if (direction_ == Forward) {
-        if (isPlaying_) {
-            emit forwardPlay();
-        } else {
-            emit forwardPause();
-        }
-    } else {
-        if (isPlaying_) {
-            emit backwardPlay();
-        } else {
-            emit backwardPause();
-        }
-    }
-    
     emit playPauseClicked();
-    emit playStateChanged(isPlaying_, direction_);
-}
-
-void VideoToolBarWidget::onForwardClicked()
-{
-    // 如果已经在正放状态，不做任何操作
-    if (direction_ == Forward && isPlaying_) {
-        return;
-    }
-    
-    direction_ = Forward;
-    isPlaying_ = true;
-    updatePlayButtons();
-    
-    emit forwardPlay();
-    emit forwardClicked();
-    emit playStateChanged(isPlaying_, direction_);
-}
-
-void VideoToolBarWidget::onBackwardClicked()
-{
-    // 如果已经在倒放状态，不做任何操作
-    if (direction_ == Backward && isPlaying_) {
-        return;
-    }
-    
-    direction_ = Backward;
-    isPlaying_ = true;
-    updatePlayButtons();
-    
-    emit backwardPlay();
-    emit backwardClicked();
-    emit playStateChanged(isPlaying_, direction_);
 }
 
 void VideoToolBarWidget::onSpeedComboChanged(int index)

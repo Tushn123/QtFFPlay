@@ -68,13 +68,6 @@ void VideoWidget::initUi()
         videoToolBarWidget->setPlaying(false);
     });
     
-    // 工具栏逐帧后退按钮（暂不支持，提示用户）
-    connect(videoToolBarWidget, &VideoToolBarWidget::stepBackwardClicked,
-            this, [this]() {
-        qDebug() << "[VideoWidget] Step backward not supported yet";
-        // TODO: 实现逐帧后退功能（需要解码器支持）
-    });
-    
     // 工具栏进度条拖动/点击 -> 播放器 seek
     connect(videoToolBarWidget, &VideoToolBarWidget::seekRequested,
             this, [this](qint64 position) {
