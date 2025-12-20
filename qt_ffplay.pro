@@ -13,6 +13,7 @@ SOURCES += \
     main.cpp \
     qt/PlayerWidget.cpp \
     qt/VideoGLWidget.cpp \
+    qt/ThumbnailExtractor.cpp \
     player/ffplay.c \
     player/ff_ffplayer.c \
     player/ff_vout.c \
@@ -31,6 +32,7 @@ HEADERS += \
     qt/VideoTitleBarWidget.h \
     qt/VideoToolBarWidget.h \
     qt/VideoWidget.h \
+    qt/ThumbnailExtractor.h \
     qt/htable.h \
     player/ff_define.h \
     player/ff_types.h \

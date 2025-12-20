@@ -8,9 +8,11 @@
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QFrame>
+#include <QImage>
+#include <QTimer>
 
 /**
- * 进度条时间提示浮窗
+ * 进度条预览浮窗（包含预览画面和时间）
  */
 class ProgressTooltip : public QFrame
 {
@@ -19,10 +21,17 @@ public:
     explicit ProgressTooltip(QWidget *parent = nullptr);
     
     void setTime(qint64 milliseconds);
+    void setPreviewImage(const QImage &image);
+    void clearPreview();
     void showAt(const QPoint &globalPos);
     
+    // 预览图尺寸
+    static constexpr int PREVIEW_WIDTH = 160;
+    static constexpr int PREVIEW_HEIGHT = 90;
+    
 private:
-    QLabel *m_timeLabel;
+    QLabel *m_previewLabel;  // 预览画面
+    QLabel *m_timeLabel;     // 时间显示
 };
 
 /**
@@ -40,9 +49,14 @@ public:
     void setDuration(qint64 milliseconds);
     qint64 duration() const { return m_duration; }
     
+    // 设置预览图片（由外部调用）
+    void setPreviewImage(const QImage &image);
+    
 signals:
     // 点击或拖动请求跳转到指定位置
     void seekRequested(qint64 position);
+    // 请求指定位置的预览帧
+    void previewRequested(qint64 position);
     
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -50,6 +64,9 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void enterEvent(QEvent *event) override;
     void leaveEvent(QEvent *event) override;
+    
+private slots:
+    void onPreviewDelayTimeout();
     
 private:
     qint64 positionFromMouse(int x) const;
@@ -59,6 +76,12 @@ private:
     ProgressTooltip *m_tooltip;
     qint64 m_duration;
     bool m_isDragging;
+    qint64 m_lastPreviewPos;  // 上次请求预览的位置，避免重复请求
+    
+    // 预览延迟（避免快速移动时频繁解码）
+    QTimer *m_previewDelayTimer;
+    qint64 m_pendingPreviewPos;  // 待请求的预览位置
+    static constexpr int PREVIEW_DELAY_MS = 200;  // 延迟时间
 };
 
 /**
@@ -130,6 +153,9 @@ public:
     bool isMuted() const;
 
     void updateTimeDisplay();
+    
+    // 设置预览图片（用于进度条悬停预览）
+    void setPreviewImage(const QImage &image);
 
 protected:
     void initUI();
@@ -155,7 +181,8 @@ signals:
     void progressChanged(int value); // 进度条值改变
     void progressPressed();          // 进度条按下
     void progressReleased();         // 进度条释放
-    void seekRequested(qint64 position); // 请求跳转到指定位置（毫秒）
+    void seekRequested(qint64 position);    // 请求跳转到指定位置（毫秒）
+    void previewRequested(qint64 position); // 请求指定位置的预览帧
 
     // 倍速信号
     void speedChanged(float speed);  // 倍速改变

@@ -7,6 +7,7 @@
 
 #include "PlayerWidget.h"
 #include "VideoGLWidget.h"
+#include "ThumbnailExtractor.h"
 #include <QKeyEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
@@ -55,6 +56,7 @@ PlayerWidget::PlayerWidget(QWidget *parent)
 #endif
     , m_videoWidget(nullptr)
     , m_layout(nullptr)
+    , m_thumbnailExtractor(nullptr)
     , m_msgLoopRunning(false)
     , m_lastState(MP_STATE_IDLE)
     , m_startOnPrepared(false)
@@ -83,6 +85,14 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     
     // 设置布局
     setupLayout();
+    
+    // 创建缩略图提取器（用于任意位置预览）
+    m_thumbnailExtractor = new ThumbnailExtractor(this);
+    connect(m_thumbnailExtractor, &ThumbnailExtractor::thumbnailReady,
+            this, [this](const QImage &image, qint64 positionMs) {
+        Q_UNUSED(positionMs);
+        emit previewFrameReady(image);
+    });
     
     // 创建播放位置更新定时器（每 200ms 更新一次）
     m_positionTimer = new QTimer(this);
@@ -290,6 +300,26 @@ void PlayerWidget::setMedia(const QString &path)
     
     qDebug() << "Data source set, state:" << mp_get_state(m_mp);
     
+    // 打开缩略图提取器（用于进度条预览）
+    // 硬件加速配置与播放器保持一致（封装性：统一由 PlayerWidget 管理）
+    if (m_thumbnailExtractor) {
+        // 转换 PlayerWidget 的硬件加速类型到 ThumbnailExtractor 的类型
+        ThumbnailHWAccelType thumbHWType = ThumbnailHWAccelType::None;
+        switch (m_hwAccelType) {
+        case HWAccelType::Auto: thumbHWType = ThumbnailHWAccelType::Auto; break;
+        case HWAccelType::DXVA2: thumbHWType = ThumbnailHWAccelType::DXVA2; break;
+        case HWAccelType::D3D11VA: thumbHWType = ThumbnailHWAccelType::D3D11VA; break;
+        case HWAccelType::CUDA: thumbHWType = ThumbnailHWAccelType::CUDA; break;
+        case HWAccelType::VAAPI: thumbHWType = ThumbnailHWAccelType::VAAPI; break;
+        case HWAccelType::VDPAU: thumbHWType = ThumbnailHWAccelType::VDPAU; break;
+        case HWAccelType::VideoToolbox: thumbHWType = ThumbnailHWAccelType::VideoToolbox; break;
+        case HWAccelType::QSV: thumbHWType = ThumbnailHWAccelType::QSV; break;
+        default: thumbHWType = ThumbnailHWAccelType::None; break;
+        }
+        m_thumbnailExtractor->setHWAccelType(thumbHWType);
+        m_thumbnailExtractor->open(m_mediaPath);
+    }
+    
     // 启动消息循环线程（ijkplayer 风格：上层驱动消息循环）
     startMessageLoop();
     
@@ -353,6 +383,11 @@ void PlayerWidget::stop()
         mp_shutdown(m_mp);
         mp_dec_ref_p(&m_mp);
         m_mp = nullptr;
+    }
+    
+    // 关闭缩略图提取器
+    if (m_thumbnailExtractor) {
+        m_thumbnailExtractor->close();
     }
     
     // 清除视频显示
@@ -516,6 +551,15 @@ int PlayerWidget::volume() const
         return (int)(mp_get_volume(m_mp) * 100);
     }
     return 100;
+}
+
+void PlayerWidget::requestPreviewFrame(qint64 position)
+{
+    // 使用独立的缩略图提取器获取任意位置的帧
+    // 不影响播放，异步提取
+    if (m_thumbnailExtractor && m_thumbnailExtractor->isOpen()) {
+        m_thumbnailExtractor->requestThumbnail(position);
+    }
 }
 
 void PlayerWidget::setLoopCount(int count)

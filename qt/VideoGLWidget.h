@@ -51,6 +51,12 @@ public:
     void clearFrame();
 
     /**
+     * 获取当前帧为 QImage（用于预览）
+     * @return 当前帧的 RGB 图像，如果没有帧则返回空图像
+     */
+    QImage getCurrentFrame();
+
+    /**
      * 获取视频原始尺寸
      */
     QSize videoSize() const { return m_videoSize; }

@@ -14,35 +14,60 @@ ProgressTooltip::ProgressTooltip(QWidget *parent)
 {
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_ShowWithoutActivating);  // 显示时不抢焦点
-    setFixedSize(70, 32);
+    
+    // 计算总尺寸：预览图 + 边距 + 时间标签
+    int totalWidth = PREVIEW_WIDTH + 8;   // 预览宽度 + 左右边距
+    int totalHeight = PREVIEW_HEIGHT + 30; // 预览高度 + 时间标签 + 边距
+    setFixedSize(totalWidth, totalHeight);
     
     // 不使用类名选择器，直接设置样式
     setAutoFillBackground(true);
     QPalette pal = palette();
-    pal.setColor(QPalette::Window, QColor(30, 30, 30, 230));
+    pal.setColor(QPalette::Window, QColor(30, 30, 30, 240));
     setPalette(pal);
     
     setStyleSheet(R"(
         QFrame {
-            background-color: rgba(30, 30, 30, 230);
-            border: 1px solid #666666;
-            border-radius: 4px;
+            background-color: rgba(30, 30, 30, 240);
+            border: 1px solid #555555;
+            border-radius: 6px;
         }
         QLabel {
             color: white;
-            font-size: 13px;
-            font-weight: bold;
             background: transparent;
             border: none;
         }
     )");
     
     QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(2);
     
+    // 预览画面标签
+    m_previewLabel = new QLabel(this);
+    m_previewLabel->setFixedSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+    m_previewLabel->setAlignment(Qt::AlignCenter);
+    m_previewLabel->setStyleSheet(R"(
+        QLabel {
+            background-color: #1a1a1a;
+            border: 1px solid #444444;
+            border-radius: 3px;
+        }
+    )");
+    // m_previewLabel->setText("预览");  // 默认显示文字
+    
+    // 时间标签
     m_timeLabel = new QLabel("00:00", this);
     m_timeLabel->setAlignment(Qt::AlignCenter);
+    m_timeLabel->setStyleSheet(R"(
+        QLabel {
+            font-size: 12px;
+            font-weight: bold;
+            color: #ffffff;
+        }
+    )");
     
+    layout->addWidget(m_previewLabel);
     layout->addWidget(m_timeLabel);
 }
 
@@ -67,11 +92,33 @@ void ProgressTooltip::setTime(qint64 milliseconds)
     }
 }
 
+void ProgressTooltip::setPreviewImage(const QImage &image)
+{
+    if (image.isNull()) {
+        m_previewLabel->setText("预览");
+        return;
+    }
+    
+    // 缩放图片以适应预览区域，保持宽高比
+    QPixmap pixmap = QPixmap::fromImage(image).scaled(
+        PREVIEW_WIDTH, PREVIEW_HEIGHT,
+        Qt::KeepAspectRatio,
+        Qt::SmoothTransformation
+    );
+    m_previewLabel->setPixmap(pixmap);
+}
+
+void ProgressTooltip::clearPreview()
+{
+    m_previewLabel->clear();
+    m_previewLabel->setText("预览");
+}
+
 void ProgressTooltip::showAt(const QPoint &globalPos)
 {
     // 显示在指定位置上方
     int x = globalPos.x() - width() / 2;
-    int y = globalPos.y() - height() - 10;
+    int y = globalPos.y() - height() - 12;
     
     move(x, y);
     
@@ -88,9 +135,16 @@ VideoProgressSlider::VideoProgressSlider(QWidget *parent)
     , m_tooltip(new ProgressTooltip(nullptr))  // 无父窗口，独立显示
     , m_duration(0)
     , m_isDragging(false)
+    , m_lastPreviewPos(-1)
+    , m_previewDelayTimer(new QTimer(this))
+    , m_pendingPreviewPos(-1)
 {
     setMouseTracking(true);
     setRange(0, 1000);
+    
+    // 预览延迟定时器（单次触发）
+    m_previewDelayTimer->setSingleShot(true);
+    connect(m_previewDelayTimer, &QTimer::timeout, this, &VideoProgressSlider::onPreviewDelayTimeout);
     
     // 进度条样式
     setStyleSheet(R"(
@@ -189,6 +243,29 @@ void VideoProgressSlider::updateTooltip(int x)
     // 计算显示位置（在进度条上方）
     QPoint globalPos = mapToGlobal(QPoint(x, 0));
     m_tooltip->showAt(globalPos);
+    
+    // 延迟请求预览帧（鼠标悬停超过 200ms 才解码）
+    // 避免快速移动时频繁解码影响播放性能
+    if (qAbs(position - m_lastPreviewPos) > 500) {
+        m_pendingPreviewPos = position;
+        m_previewDelayTimer->start(PREVIEW_DELAY_MS);
+    }
+}
+
+void VideoProgressSlider::onPreviewDelayTimeout()
+{
+    // 延迟时间到，发送预览请求
+    if (m_pendingPreviewPos >= 0 && m_pendingPreviewPos != m_lastPreviewPos) {
+        m_lastPreviewPos = m_pendingPreviewPos;
+        emit previewRequested(m_pendingPreviewPos);
+    }
+}
+
+void VideoProgressSlider::setPreviewImage(const QImage &image)
+{
+    if (m_tooltip) {
+        m_tooltip->setPreviewImage(image);
+    }
 }
 
 void VideoProgressSlider::mousePressEvent(QMouseEvent *event)
@@ -254,9 +331,16 @@ void VideoProgressSlider::enterEvent(QEvent *event)
 void VideoProgressSlider::leaveEvent(QEvent *event)
 {
     QSlider::leaveEvent(event);
+    
+    // 停止预览延迟定时器
+    m_previewDelayTimer->stop();
+    m_pendingPreviewPos = -1;
+    
     if (m_tooltip) {
         m_tooltip->hide();
+        m_tooltip->clearPreview();
     }
+    m_lastPreviewPos = -1;  // 重置，下次进入时重新请求
 }
 
 // ============ VolumePopup 实现 ============
@@ -672,6 +756,7 @@ void VideoToolBarWidget::initConnect()
     connect(progressSlider, &QSlider::sliderPressed, this, &VideoToolBarWidget::onProgressSliderPressed);
     connect(progressSlider, &QSlider::sliderReleased, this, &VideoToolBarWidget::onProgressSliderReleased);
     connect(progressSlider, &VideoProgressSlider::seekRequested, this, &VideoToolBarWidget::seekRequested);
+    connect(progressSlider, &VideoProgressSlider::previewRequested, this, &VideoToolBarWidget::previewRequested);
 
     // 倍速选择
     connect(speedCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -702,6 +787,11 @@ void VideoToolBarWidget::setDuration(qint64 milliseconds)
     duration_ = milliseconds;
     progressSlider->setDuration(milliseconds);
     updateTimeDisplay();
+}
+
+void VideoToolBarWidget::setPreviewImage(const QImage &image)
+{
+    progressSlider->setPreviewImage(image);
 }
 
 void VideoToolBarWidget::updateTimeDisplay()

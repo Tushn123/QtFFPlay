@@ -12,6 +12,7 @@
 typedef struct MediaPlayer MediaPlayer;
 struct FFPVideoFrame;
 class VideoGLWidget;
+class ThumbnailExtractor;
 
 /**
  * 渲染模式
@@ -69,6 +70,14 @@ public:
     // 音量控制
     void setVolume(int volume);  // 0-100
     int volume() const;
+    
+    // 预览帧提取
+    /**
+     * 请求指定位置的预览帧
+     * @param position 位置（毫秒）
+     * 提取完成后会发出 previewFrameReady 信号
+     */
+    void requestPreviewFrame(qint64 position);
     
     // 循环播放控制
     /**
@@ -154,6 +163,9 @@ signals:
     // 视频信号
     void videoSizeChanged(int width, int height);
     
+    // 预览帧信号
+    void previewFrameReady(const QImage &image);
+    
     // 缓冲信号
     void bufferingStart();
     void bufferingEnd();
@@ -196,6 +208,9 @@ private:
     // OpenGL 渲染组件
     VideoGLWidget *m_videoWidget;
     QVBoxLayout *m_layout;
+    
+    // 缩略图提取器（用于任意位置预览）
+    ThumbnailExtractor *m_thumbnailExtractor;
     
     // 消息线程
     std::thread m_msgThread;

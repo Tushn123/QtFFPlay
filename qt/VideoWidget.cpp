@@ -82,6 +82,14 @@ void VideoWidget::initUi()
         playerWidget->seekTo(static_cast<long>(position));
     });
     
+    // 工具栏进度条预览请求 -> 请求播放器提取帧
+    connect(videoToolBarWidget, &VideoToolBarWidget::previewRequested,
+            playerWidget, &PlayerWidget::requestPreviewFrame);
+    
+    // 播放器预览帧就绪 -> 更新工具栏预览图
+    connect(playerWidget, &PlayerWidget::previewFrameReady,
+            videoToolBarWidget, &VideoToolBarWidget::setPreviewImage);
+    
     // 工具栏倍速选择 -> 播放器倍速设置
     connect(videoToolBarWidget, &VideoToolBarWidget::speedChanged,
             this, [this](float speed) {

@@ -719,6 +719,74 @@ void VideoGLWidget::clearFrame()
     update();
 }
 
+QImage VideoGLWidget::getCurrentFrame()
+{
+    // 先快速复制数据，尽快释放锁，避免阻塞帧更新
+    QByteArray yBuffer, uBuffer, vBuffer;
+    int width, height;
+    int linesize[3];
+    
+    {
+        QMutexLocker locker(&m_frameMutex);
+        
+        if (m_frameWidth <= 0 || m_frameHeight <= 0 || 
+            m_bufferY.isEmpty() || m_bufferU.isEmpty() || m_bufferV.isEmpty()) {
+            return QImage();
+        }
+        
+        // 快速复制数据
+        width = m_frameWidth;
+        height = m_frameHeight;
+        yBuffer = m_bufferY;
+        uBuffer = m_bufferU;
+        vBuffer = m_bufferV;
+        linesize[0] = m_linesize[0] > 0 ? m_linesize[0] : width;
+        linesize[1] = m_linesize[1] > 0 ? m_linesize[1] : width / 2;
+        linesize[2] = m_linesize[2] > 0 ? m_linesize[2] : width / 2;
+    }
+    // 锁已释放，可以安全地进行耗时的 YUV->RGB 转换
+    
+    // 缩小预览图尺寸以加快转换速度（预览不需要全分辨率）
+    int previewWidth = qMin(width, 320);
+    int previewHeight = height * previewWidth / width;
+    int stepX = width / previewWidth;
+    int stepY = height / previewHeight;
+    
+    QImage image(previewWidth, previewHeight, QImage::Format_RGB888);
+    
+    const uchar *yData = reinterpret_cast<const uchar*>(yBuffer.constData());
+    const uchar *uData = reinterpret_cast<const uchar*>(uBuffer.constData());
+    const uchar *vData = reinterpret_cast<const uchar*>(vBuffer.constData());
+    
+    for (int py = 0; py < previewHeight; ++py) {
+        int srcY = py * stepY;
+        uchar *rgb = image.scanLine(py);
+        
+        for (int px = 0; px < previewWidth; ++px) {
+            int srcX = px * stepX;
+            
+            int Y = yData[srcY * linesize[0] + srcX];
+            int U = uData[(srcY / 2) * linesize[1] + (srcX / 2)];
+            int V = vData[(srcY / 2) * linesize[2] + (srcX / 2)];
+            
+            // YUV to RGB (BT.601)
+            int C = Y - 16;
+            int D = U - 128;
+            int E = V - 128;
+            
+            int R = qBound(0, (298 * C + 409 * E + 128) >> 8, 255);
+            int G = qBound(0, (298 * C - 100 * D - 208 * E + 128) >> 8, 255);
+            int B = qBound(0, (298 * C + 516 * D + 128) >> 8, 255);
+            
+            rgb[px * 3 + 0] = R;
+            rgb[px * 3 + 1] = G;
+            rgb[px * 3 + 2] = B;
+        }
+    }
+    
+    return image;
+}
+
 void VideoGLWidget::onFrameReady()
 {
     // 减少待渲染帧计数
