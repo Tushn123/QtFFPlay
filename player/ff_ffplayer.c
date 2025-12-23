@@ -306,17 +306,10 @@ void ffp_destroy(FFPlayer *ffp)
     if (!ffp)
         return;
 
-    /* 不在这里关闭音频设备：
-     * 1. SDL 可能对多个播放器返回相同的 audio_dev ID（共享设备），
-     *    关闭会影响其他播放器
-     * 2. 如果是最后一个播放器，sdl_quit_with_ref 中的 SDL_Quit() 
-     *    已经清理了所有 SDL 资源
-     * 音频设备已在 stream_component_close 中暂停，这里只是清零标记 */
-    if (ffp->audio_dev) {
-        av_log(NULL, AV_LOG_INFO, "[FFP-DESTROY] ffp=%p - Audio device %u was paused, will be cleaned by SDL_Quit\n", 
-               ffp, ffp->audio_dev);
-        ffp->audio_dev = 0;
-    }
+    /* 音频设备由全局混音器管理，不需要在这里处理
+     * 每个播放器的 AudioStream 在 stream_component_close 中移除
+     * 混音器的 SDL 音频设备会在最后一个播放器退出时由 SDL_Quit 清理 */
+    ffp->audio_dev = 0;
 
     ffp_reset(ffp);
     av_free(ffp);

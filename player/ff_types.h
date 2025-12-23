@@ -11,6 +11,7 @@
 /* Forward declarations */
 struct FFPlayer;
 struct FFVoutTexture;
+struct AudioStream;
 
 typedef struct MyAVPacketList {
     AVPacket *pkt;      //解封装后的数据
@@ -164,6 +165,8 @@ typedef struct VideoState {
 #endif
     struct AudioParams audio_tgt;       // SDL⽀持的⾳频参数，重采样转换：audio_src->audio_tgt
     struct SwrContext *swr_ctx;         // ⾳频重采样context
+    struct AudioStream *mixer_stream;   // 混音器中的音频流句柄
+    SDL_Thread *audio_feeder_tid;       // 音频馈送线程句柄
     int frame_drops_early;              // 丢弃视频packet计数
     int frame_drops_late;               // 丢弃视频frame计数
 

@@ -20,6 +20,7 @@ SOURCES += \
     player/ff_queue.c \
     player/ff_decoder.c \
     player/ff_clock.c \
+    player/ff_audio_mixer.c \
     player/cmdutils.c \
     player/opt_common.c \
     player/mediaplayer.c
@@ -40,6 +41,7 @@ HEADERS += \
     player/ff_decoder.h \
     player/ff_clock.h \
     player/ff_vout.h \
+    player/ff_audio_mixer.h \
     player/ffplay.h \
     player/ff_ffplayer.h \
     player/ff_ffmsg.h \
