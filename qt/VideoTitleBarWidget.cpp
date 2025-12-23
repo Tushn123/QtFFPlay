@@ -49,15 +49,11 @@ VideoTitleBarWidget::VideoTitleBarWidget(QWidget *parent)
 {
     this->setAttribute(Qt::WA_StyledBackground, true);
     this->setAutoFillBackground(true);
-    this->setStyleSheet(
-        "VideoTitleBarWidget {"
-        "  background: qlineargradient("
-        "    x1:0, y1:0, x2:0, y2:1,"
-        "    stop:0 rgba(0, 0, 0, 220),"
-        "    stop:1 rgba(0, 0, 0, 180)"
-        "  );"
-        "}"
-    );
+    
+    // 使用 QPalette 设置半透明深灰背景
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, QColor(19, 19, 19, 220));  // 深灰色，带透明度
+    setPalette(pal);
     
     initUI();
     initConnect();

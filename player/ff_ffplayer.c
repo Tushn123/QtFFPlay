@@ -33,6 +33,10 @@
 /* 全局初始化状态 */
 static int g_ffp_global_init_done = 0;
 
+/* SDL 引用计数（多播放器共享 SDL） */
+static int g_sdl_ref_count = 0;
+static SDL_mutex *g_sdl_mutex = NULL;
+
 /*
  * =============================================================================
  * 全局初始化/反初始化
@@ -54,6 +58,11 @@ void ffp_global_init(void)
 
     /* 初始化网络 */
     avformat_network_init();
+    
+    /* 初始化 SDL 引用计数互斥锁 */
+    if (!g_sdl_mutex) {
+        g_sdl_mutex = SDL_CreateMutex();
+    }
 
     g_ffp_global_init_done = 1;
 }
@@ -65,8 +74,72 @@ void ffp_global_uninit(void)
 
     /* 清理网络 */
     avformat_network_deinit();
+    
+    /* 销毁 SDL 互斥锁 */
+    if (g_sdl_mutex) {
+        SDL_DestroyMutex(g_sdl_mutex);
+        g_sdl_mutex = NULL;
+    }
 
     g_ffp_global_init_done = 0;
+}
+
+/*
+ * SDL 引用计数管理（多播放器共享 SDL）
+ */
+static int sdl_init_with_ref(int flags)
+{
+    int ret = 0;
+    
+    if (g_sdl_mutex)
+        SDL_LockMutex(g_sdl_mutex);
+    
+    if (g_sdl_ref_count == 0) {
+        /* 首次初始化 SDL */
+        ret = SDL_Init(flags);
+        if (ret == 0) {
+            g_sdl_ref_count = 1;
+            av_log(NULL, AV_LOG_INFO, "[SDL] Initialized (ref_count=1)\n");
+        }
+    } else {
+        /* SDL 已初始化，增加引用计数并初始化额外子系统 */
+        ret = SDL_InitSubSystem(flags);
+        if (ret == 0) {
+            g_sdl_ref_count++;
+            av_log(NULL, AV_LOG_INFO, "[SDL] Ref count increased to %d\n", g_sdl_ref_count);
+        }
+    }
+    
+    if (g_sdl_mutex)
+        SDL_UnlockMutex(g_sdl_mutex);
+    
+    return ret;
+}
+
+static void sdl_quit_with_ref(void)
+{
+    int should_quit = 0;
+    
+    if (g_sdl_mutex)
+        SDL_LockMutex(g_sdl_mutex);
+    
+    if (g_sdl_ref_count > 0) {
+        g_sdl_ref_count--;
+        av_log(NULL, AV_LOG_INFO, "[SDL] Ref count decreased to %d\n", g_sdl_ref_count);
+        
+        if (g_sdl_ref_count == 0) {
+            should_quit = 1;
+        }
+    }
+    
+    if (g_sdl_mutex)
+        SDL_UnlockMutex(g_sdl_mutex);
+    
+    /* 在互斥锁外调用 SDL_Quit，避免使用已销毁的 SDL 资源 */
+    if (should_quit) {
+        SDL_Quit();
+        av_log(NULL, AV_LOG_INFO, "[SDL] Quit (all players stopped)\n");
+    }
 }
 
 /*
@@ -233,6 +306,18 @@ void ffp_destroy(FFPlayer *ffp)
     if (!ffp)
         return;
 
+    /* 不在这里关闭音频设备：
+     * 1. SDL 可能对多个播放器返回相同的 audio_dev ID（共享设备），
+     *    关闭会影响其他播放器
+     * 2. 如果是最后一个播放器，sdl_quit_with_ref 中的 SDL_Quit() 
+     *    已经清理了所有 SDL 资源
+     * 音频设备已在 stream_component_close 中暂停，这里只是清零标记 */
+    if (ffp->audio_dev) {
+        av_log(NULL, AV_LOG_INFO, "[FFP-DESTROY] ffp=%p - Audio device %u was paused, will be cleaned by SDL_Quit\n", 
+               ffp, ffp->audio_dev);
+        ffp->audio_dev = 0;
+    }
+
     ffp_reset(ffp);
     av_free(ffp);
 }
@@ -289,7 +374,7 @@ int ffp_init_sdl(FFPlayer *ffp)
     if (ffp->display_disable)
         flags &= ~SDL_INIT_VIDEO;
 
-    if (SDL_Init(flags)) {
+    if (sdl_init_with_ref(flags)) {
         av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL - %s\n", SDL_GetError());
         av_log(NULL, AV_LOG_FATAL, "(Did you set the DISPLAY variable?)\n");
         return -1;
@@ -384,14 +469,24 @@ void ffp_shutdown(FFPlayer *ffp)
         return;
     }
 
-    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp_shutdown called\n");
+    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp_shutdown called, ffp=%p is=%p\n", ffp, ffp->is);
+
+    /* 先设置 abort 标志和禁用音频回调，让音频回调尽早退出 */
+    if (ffp->is) {
+        av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp=%p - Setting abort flags for is=%p\n", ffp, ffp->is);
+        ffp->is->abort_request = 1;
+        ffp->is->audio_callback_enabled = 0;
+    }
 
     /* 停止渲染线程 */
+    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp=%p - Stopping render thread\n", ffp);
     ffp_stop_render_thread(ffp);
 
     if (ffp->is) {
+        av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp=%p - Calling stream_close for is=%p\n", ffp, ffp->is);
         stream_close(ffp, ffp->is);
         ffp->is = NULL;
+        av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp=%p - stream_close completed\n", ffp);
     }
 
     /* 销毁视频输出上下文 */
@@ -405,15 +500,26 @@ void ffp_shutdown(FFPlayer *ffp)
 
     ffp->window = NULL;
 
-    uninit_opts();
 #if CONFIG_AVFILTER
     av_freep(&ffp->vfilters_list);
 #endif
     if (ffp->show_status)
         printf("\n");
-    SDL_Quit();
+    
+    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp=%p - Calling sdl_quit_with_ref\n", ffp);
+    sdl_quit_with_ref();  /* 使用引用计数，只有最后一个播放器关闭时才真正退出 SDL */
+    
+    /* 检查是否需要清理全局资源
+     * 注意：如果 ref_count == 0，SDL 已经退出，不能再使用 SDL 函数
+     * 此时不需要互斥锁保护，因为没有其他播放器线程在运行 */
+    if (g_sdl_ref_count == 0) {
+        /* 最后一个播放器已关闭，释放全局选项和互斥锁
+         * uninit_opts 会处理 SDL 已退出的情况 */
+        uninit_opts();
+    }
+    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp=%p - Destroying ffp\n", ffp);
     ffp_destroy(ffp);
-    av_log(NULL, AV_LOG_QUIET, "%s", "");
+    av_log(NULL, AV_LOG_INFO, "[SHUTDOWN] ffp destroyed, shutdown complete\n");
 }
 
 /*
@@ -787,7 +893,7 @@ int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
         if (ffp->audio_disable)
             flags &= ~SDL_INIT_AUDIO;
         
-        if (SDL_Init(flags)) {
+        if (sdl_init_with_ref(flags)) {
             av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL (audio) - %s\n", SDL_GetError());
             return -1;
         }

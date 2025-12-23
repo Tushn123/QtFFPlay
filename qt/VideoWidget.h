@@ -37,7 +37,7 @@ public:
     VideoToolBarWidget *videoToolBarWidget = nullptr;
 
 private:
-    int id;     // 在MultiVideoWidget中的序号
+    int id;  // 在MultiVideoWidget中的序号
 };
 
 #endif // VIDEOWIDGET_H

@@ -38,6 +38,74 @@ extern const char *ffp_get_hwaccel_name(FFPHWAccelType type);
 
 /*
  * =============================================================================
+ * 全局 VideoState 指针管理（用于音频回调安全验证）
+ * 由于 SDL 可能对多个播放器返回相同的 audio_dev，需要验证 is 指针有效性
+ * =============================================================================
+ */
+#define MAX_VIDEO_STATES 16
+static VideoState *g_valid_video_states[MAX_VIDEO_STATES] = {0};
+static SDL_mutex *g_video_states_mutex = NULL;
+
+/* 初始化全局 VideoState 管理（首次使用时自动调用）*/
+static void init_video_states_tracking(void)
+{
+    if (!g_video_states_mutex) {
+        g_video_states_mutex = SDL_CreateMutex();
+    }
+}
+
+/* 注册一个 VideoState 为有效 */
+static void register_video_state(VideoState *is)
+{
+    init_video_states_tracking();
+    if (!is) return;
+    
+    SDL_LockMutex(g_video_states_mutex);
+    for (int i = 0; i < MAX_VIDEO_STATES; i++) {
+        if (g_valid_video_states[i] == NULL) {
+            g_valid_video_states[i] = is;
+            av_log(NULL, AV_LOG_INFO, "[VS-TRACK] Registered VideoState is=%p at slot %d\n", is, i);
+            break;
+        }
+    }
+    SDL_UnlockMutex(g_video_states_mutex);
+}
+
+/* 注销一个 VideoState */
+static void unregister_video_state(VideoState *is)
+{
+    if (!is || !g_video_states_mutex) return;
+    
+    SDL_LockMutex(g_video_states_mutex);
+    for (int i = 0; i < MAX_VIDEO_STATES; i++) {
+        if (g_valid_video_states[i] == is) {
+            g_valid_video_states[i] = NULL;
+            av_log(NULL, AV_LOG_INFO, "[VS-TRACK] Unregistered VideoState is=%p from slot %d\n", is, i);
+            break;
+        }
+    }
+    SDL_UnlockMutex(g_video_states_mutex);
+}
+
+/* 检查一个 VideoState 是否有效（用于音频回调）*/
+static int is_video_state_valid(VideoState *is)
+{
+    if (!is || !g_video_states_mutex) return 0;
+    
+    int valid = 0;
+    SDL_LockMutex(g_video_states_mutex);
+    for (int i = 0; i < MAX_VIDEO_STATES; i++) {
+        if (g_valid_video_states[i] == is) {
+            valid = 1;
+            break;
+        }
+    }
+    SDL_UnlockMutex(g_video_states_mutex);
+    return valid;
+}
+
+/*
+ * =============================================================================
  * 硬件解码支持
  * =============================================================================
  */
@@ -637,8 +705,28 @@ void stream_component_close(FFPlayer *ffp, VideoState *is, int stream_index)
 
     switch (codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
+        av_log(NULL, AV_LOG_INFO, "[AUDIO-CLOSE] is=%p ffp=%p audio_dev=%u - Starting audio close\n", 
+               is, ffp, ffp->audio_dev);
         decoder_abort(&is->auddec, &is->sampq);
-        SDL_CloseAudioDevice(ffp->audio_dev);
+        /* 禁用音频回调 - 使用 SDL 音频锁确保同步 */
+        if (ffp->audio_dev) {
+            av_log(NULL, AV_LOG_INFO, "[AUDIO-CLOSE] is=%p - Locking audio device\n", is);
+            SDL_LockAudioDevice(ffp->audio_dev);  /* 等待当前回调完成并阻止新回调 */
+            is->audio_callback_enabled = 0;
+            is->abort_request = 1;
+            av_log(NULL, AV_LOG_INFO, "[AUDIO-CLOSE] is=%p - Flags set, unlocking\n", is);
+            SDL_UnlockAudioDevice(ffp->audio_dev);
+            
+            av_log(NULL, AV_LOG_INFO, "[AUDIO-CLOSE] is=%p - Pausing audio device (not closing yet)\n", is);
+            SDL_PauseAudioDevice(ffp->audio_dev, 1);
+            /* 注意：不在这里关闭音频设备！
+             * 音频设备将在 ffp_destroy 中关闭
+             * 这样可以避免多播放器共享 SDL 时的竞争问题 */
+            
+            /* 等待当前可能正在执行的回调完成 */
+            SDL_Delay(50);
+            av_log(NULL, AV_LOG_INFO, "[AUDIO-CLOSE] is=%p - Audio device paused, pending close in ffp_destroy\n", is);
+        }
         decoder_destroy(&is->auddec);
         swr_free(&is->swr_ctx);
         av_freep(&is->audio_buf1);
@@ -685,13 +773,19 @@ void stream_component_close(FFPlayer *ffp, VideoState *is, int stream_index)
 
 void stream_close(FFPlayer *ffp, VideoState *is)
 {
+    av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] ffp=%p is=%p - Starting stream close\n", ffp, is);
+    
     /* XXX: use a special url_shutdown call to abort parse cleanly */
     is->abort_request = 1;
+    av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] is=%p - Waiting for read thread\n", is);
     SDL_WaitThread(is->read_tid, NULL);
+    av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] is=%p - Read thread finished\n", is);
 
     /* close each stream */
-    if (is->audio_stream >= 0)
+    if (is->audio_stream >= 0) {
+        av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] is=%p - Closing audio stream %d\n", is, is->audio_stream);
         stream_component_close(ffp, is, is->audio_stream);
+    }
     if (is->video_stream >= 0)
         stream_component_close(ffp, is, is->video_stream);
     if (is->subtitle_stream >= 0)
@@ -723,7 +817,19 @@ void stream_close(FFPlayer *ffp, VideoState *is)
         vout_texture_destroy(is->vid_texture);
     if (is->sub_texture)
         vout_texture_destroy(is->sub_texture);
+    
+    /* 注销 VideoState，使音频回调知道该指针不再有效 */
+    unregister_video_state(is);
+    
+    /* 额外延迟确保任何残留的音频回调已完全退出 */
+    av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] is=%p - Waiting 100ms before free\n", is);
+    SDL_Delay(100);
+    
+    /* 清零内存，使悬空指针访问更容易被检测 */
+    av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] is=%p - Clearing and freeing VideoState\n", is);
+    memset(is, 0, sizeof(VideoState));
     av_free(is);
+    av_log(NULL, AV_LOG_INFO, "[STREAM-CLOSE] VideoState freed\n");
 }
 
 void set_default_window_size(FFPlayer *ffp, int width, int height, AVRational sar)
@@ -1992,13 +2098,54 @@ int audio_decode_frame(FFPlayer *ffp, VideoState *is)
 /* prepare a new audio buffer */
 void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
 {
+    /* 首先填充静音，确保即使提前返回也有有效输出 */
+    memset(stream, 0, len);
+    
     VideoState *is = opaque;
+    
+    /* 安全检查：如果 is 为空，直接返回 */
+    if (!is) {
+        av_log(NULL, AV_LOG_WARNING, "[AUDIO-CB] is=NULL, returning silence\n");
+        return;
+    }
+    
+    /* 关键检查：验证 is 指针是否仍然有效
+     * 由于 SDL 可能对多个播放器返回相同的 audio_dev，当一个播放器关闭后
+     * 其 is 指针可能仍在回调中被使用，这里通过全局表验证其有效性 */
+    if (!is_video_state_valid(is)) {
+        /* is 指针已失效（对应的 VideoState 已被释放），静默返回 */
+        return;
+    }
+    
+    /* 检查音频回调是否已禁用（使用 volatile 读取确保看到最新值）*/
+    if (!is->audio_callback_enabled) {
+        av_log(NULL, AV_LOG_DEBUG, "[AUDIO-CB] is=%p audio_callback_enabled=0, returning silence\n", is);
+        return;
+    }
+    
+    /* 检查是否正在关闭 */
+    if (is->abort_request) {
+        av_log(NULL, AV_LOG_DEBUG, "[AUDIO-CB] is=%p abort_request=1, returning silence\n", is);
+        return;
+    }
+    
     FFPlayer *ffp = is->ffp;
+    
+    /* 安全检查：如果 ffp 为空，直接返回 */
+    if (!ffp) {
+        av_log(NULL, AV_LOG_WARNING, "[AUDIO-CB] is=%p ffp=NULL, returning silence\n", is);
+        return;
+    }
+    
     int audio_size, len1;
 
     ffp->audio_callback_time = av_gettime_relative();
 
     while (len > 0) {
+        /* 在循环中也检查退出标志，确保快速响应关闭请求 */
+        if (!is_video_state_valid(is) || is->abort_request || !is->audio_callback_enabled)
+            return;  /* stream 已在开头被填充为静音 */
+        
         if (is->audio_buf_index >= is->audio_buf_size) {
            audio_size = audio_decode_frame(ffp, is);
            if (audio_size < 0) {
@@ -2017,7 +2164,7 @@ void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
         if (!is->muted && is->audio_buf && is->audio_volume == SDL_MIX_MAXVOLUME)
             memcpy(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, len1);
         else {
-            memset(stream, 0, len1);
+            /* stream 已在开头被填充为静音，这里只需混音 */
             if (!is->muted && is->audio_buf)
                 SDL_MixAudioFormat(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, AUDIO_S16SYS, len1, is->audio_volume);
         }
@@ -2066,7 +2213,23 @@ int audio_open(FFPlayer *ffp, void *opaque, AVChannelLayout *wanted_channel_layo
     wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AUDIO_MAX_CALLBACKS_PER_SEC));
     wanted_spec.callback = sdl_audio_callback;
     wanted_spec.userdata = opaque;
-    while (!(ffp->audio_dev = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_CHANNELS_CHANGE))) {
+    
+    /* 调用前记录当前 audio_dev 值 */
+    av_log(NULL, AV_LOG_INFO, "[AUDIO-OPEN] ffp=%p (audio_dev before=%u) calling SDL_OpenAudioDevice, opaque(is)=%p\n", 
+           ffp, ffp->audio_dev, opaque);
+    
+    /* 尝试打开音频设备，失败时调整参数重试 */
+    while (1) {
+        SDL_AudioDeviceID new_dev = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, 
+                                                        SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_CHANNELS_CHANGE);
+        av_log(NULL, AV_LOG_INFO, "[AUDIO-OPEN] ffp=%p SDL_OpenAudioDevice returned %u (error: %s)\n", 
+               ffp, new_dev, new_dev ? "none" : SDL_GetError());
+        
+        if (new_dev > 0) {
+            ffp->audio_dev = new_dev;
+            break;
+        }
+        
         av_log(NULL, AV_LOG_WARNING, "SDL_OpenAudio (%d channels, %d Hz): %s\n",
                wanted_spec.channels, wanted_spec.freq, SDL_GetError());
         wanted_spec.channels = next_nb_channels[FFMIN(7, wanted_spec.channels)];
@@ -2081,6 +2244,7 @@ int audio_open(FFPlayer *ffp, void *opaque, AVChannelLayout *wanted_channel_layo
         }
         av_channel_layout_default(wanted_channel_layout, wanted_spec.channels);
     }
+    av_log(NULL, AV_LOG_INFO, "[AUDIO-OPEN] ffp=%p SDL_OpenAudioDevice returned audio_dev=%u\n", ffp, ffp->audio_dev);
     if (spec.format != AUDIO_S16SYS) {
         av_log(NULL, AV_LOG_ERROR,
                "SDL advised audio format %d is not supported!\n", spec.format);
@@ -2106,6 +2270,8 @@ int audio_open(FFPlayer *ffp, void *opaque, AVChannelLayout *wanted_channel_layo
         av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size failed\n");
         return -1;
     }
+    av_log(NULL, AV_LOG_INFO, "[AUDIO-OPEN] ffp=%p audio_dev=%u opaque(is)=%p opened successfully\n",
+           ffp, ffp->audio_dev, opaque);
     return spec.size;
 }
 
@@ -2239,6 +2405,7 @@ int stream_component_open(FFPlayer *ffp, VideoState *is, int stream_index)
         }
         if ((ret = decoder_start(&is->auddec, audio_thread, "audio_decoder", is)) < 0)
             goto out;
+        is->audio_callback_enabled = 1;  /* 启用音频回调 */
         SDL_PauseAudioDevice(ffp->audio_dev, 0);
         break;
     case AVMEDIA_TYPE_VIDEO:
@@ -2657,6 +2824,8 @@ VideoState *stream_open(FFPlayer *ffp, const char *filename, const AVInputFormat
     if (!is)
         return NULL;
     is->ffp = ffp;  /* Store FFPlayer reference */
+    av_log(NULL, AV_LOG_INFO, "[STREAM-OPEN] Created VideoState is=%p for ffp=%p file=%s\n", 
+           is, ffp, filename);
     is->last_video_stream = is->video_stream = -1;
     is->last_audio_stream = is->audio_stream = -1;
     is->last_subtitle_stream = is->subtitle_stream = -1;
@@ -2705,6 +2874,10 @@ fail:
         stream_close(ffp, is);
         return NULL;
     }
+    
+    /* 注册 VideoState 以便音频回调验证指针有效性 */
+    register_video_state(is);
+    
     return is;
 }
 

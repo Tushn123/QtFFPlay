@@ -1,6 +1,7 @@
 #include "VideoWidget.h"
 #include <QDebug>
 #include <QAbstractItemView>
+#include <QPalette>
 
 VideoWidget::VideoWidget(QWidget *parent)
     : QWidget{parent}
@@ -10,8 +11,15 @@ VideoWidget::VideoWidget(QWidget *parent)
 
 void VideoWidget::initUi()
 {
+    // 设置 VideoWidget 自身背景为深灰色（比黑色稍浅，能看出区别）
+    setAutoFillBackground(true);
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, QColor(19, 19, 19));  // 深灰色 #191919
+    setPalette(pal);
+    
     videoTitleBarWidget = new VideoTitleBarWidget(this);
     playerWidget = new PlayerWidget(this);
+    playerWidget->hide();  // 初始状态隐藏，播放时才显示
     videoToolBarWidget = new VideoToolBarWidget(this);
 
     // 主布局
@@ -125,12 +133,16 @@ void VideoWidget::initUi()
         videoToolBarWidget->setProgress(0);
         // 设置新媒体并播放（setMedia 内部会自动重置播放器状态）
         playerWidget->setMedia(filePath);
+        playerWidget->show();  // 播放时显示
         playerWidget->play();
     });
 
     // 设置默认媒体文件（可选：启动时自动播放）
     QString mediaPath = "C:/shn/media/animal.mp4";
+    qDebug() << "[VideoWidget] id=" << id << "this=" << this 
+             << "playerWidget=" << playerWidget << "- Setting default media:" << mediaPath;
     playerWidget->setMedia(mediaPath);
+    playerWidget->show();  // 播放时显示
     playerWidget->play();
 
     // 设置底部工具栏的位置（需要在resizeEvent中调整）
@@ -193,6 +205,8 @@ int VideoWidget::getId() const
 void VideoWidget::setId(int newId)
 {
     id = newId;
+    qDebug() << "[VideoWidget] setId called, id=" << id << "this=" << this 
+             << "playerWidget=" << playerWidget;
 }
 
 void VideoWidget::updateBarPosition()
@@ -220,11 +234,15 @@ void VideoWidget::updateBarPosition()
 
 void VideoWidget::stopAndReset()
 {
-    qDebug() << "[VideoWidget] stopAndReset - full cleanup";
+    qDebug() << "[VideoWidget] stopAndReset - full cleanup, id=" << id 
+             << "this=" << this << "playerWidget=" << playerWidget;
     
     // 1. 停止播放器并释放所有资源
     if (playerWidget) {
+        qDebug() << "[VideoWidget] id=" << id << "- Calling playerWidget->stop()";
         playerWidget->stop();
+        playerWidget->hide();  // 停止时隐藏
+        qDebug() << "[VideoWidget] id=" << id << "- playerWidget stopped and hidden";
     }
     
     // 2. 重置工具栏状态

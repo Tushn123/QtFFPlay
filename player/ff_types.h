@@ -105,6 +105,7 @@ typedef struct VideoState {
     SDL_Thread *read_tid;               // 读线程句柄
     const AVInputFormat *iformat;       // 指向demuxer
     int abort_request;                  // =1时请求退出播放
+    volatile int audio_callback_enabled; // 音频回调是否启用（0=禁用，1=启用）
     int force_refresh;                  // =1时需要刷新画⾯，请求⽴即刷新画⾯的意思，如暂停时窗口尺寸变化需要刷新
     int paused;                         // =1时暂停，=0时播放
     int last_paused;                    // 暂存"暂停"/"播放"状态

@@ -3,6 +3,7 @@
 
 #include <QElapsedTimer>
 #include <QResizeEvent>
+#include <QPalette>
 
 MultiVideoWidget::MultiVideoWidget(QWidget *parent)
     : QWidget{parent}
@@ -14,6 +15,13 @@ MultiVideoWidget::MultiVideoWidget(QWidget *parent)
 
 void MultiVideoWidget::initUI() {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    
+    // 设置背景颜色为纯黑色
+    setAutoFillBackground(true);
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, QColor(0, 0, 0));  // 纯黑色
+    setPalette(pal);
+    
     setLayout(2,2);
 
     for (int i = 0; i < MV_STYLE_MAXNUM; ++i) {

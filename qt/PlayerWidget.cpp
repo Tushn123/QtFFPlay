@@ -15,6 +15,7 @@
 #include <QFocusEvent>
 #include <QDebug>
 #include <QPainter>
+#include <QPalette>
 #include <QMetaObject>
 
 // 避免 C 头文件中的 class 关键字冲突
@@ -77,10 +78,10 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     // 设置最小尺寸
     setMinimumSize(320, 240);
     
-    // 设置黑色背景
+    // 设置深灰色背景（与 VideoWidget 一致）
     setAutoFillBackground(true);
     QPalette pal = palette();
-    pal.setColor(QPalette::Window, Qt::black);
+    pal.setColor(QPalette::Window, QColor(19, 19, 19));
     setPalette(pal);
     
     // 设置布局
@@ -368,7 +369,7 @@ void PlayerWidget::pause()
 
 void PlayerWidget::stop()
 {
-    qDebug() << "[PlayerWidget] stop() called - full cleanup";
+    qDebug() << "[PlayerWidget] stop() called - full cleanup, this=" << this << "m_mp=" << m_mp;
     
     // 停止位置更新定时器
     if (m_positionTimer) {
@@ -380,9 +381,12 @@ void PlayerWidget::stop()
     
     // 销毁 MediaPlayer，释放所有资源
     if (m_mp) {
+        qDebug() << "[PlayerWidget] Calling mp_shutdown for m_mp=" << m_mp;
         mp_shutdown(m_mp);
+        qDebug() << "[PlayerWidget] Calling mp_dec_ref_p for m_mp=" << m_mp;
         mp_dec_ref_p(&m_mp);
         m_mp = nullptr;
+        qDebug() << "[PlayerWidget] MediaPlayer destroyed";
     }
     
     // 关闭缩略图提取器
