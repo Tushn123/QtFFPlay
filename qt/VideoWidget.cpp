@@ -143,6 +143,7 @@ void VideoWidget::initUi()
              << "playerWidget=" << playerWidget << "- Setting default media:" << mediaPath;
     playerWidget->setMedia(mediaPath);
     playerWidget->show();  // 播放时显示
+    playerWidget->setVolume(0);  // 默认静音，避免多屏播放时声音混乱
     playerWidget->play();
 
     // 设置底部工具栏的位置（需要在resizeEvent中调整）

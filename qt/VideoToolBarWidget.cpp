@@ -363,16 +363,16 @@ VolumePopup::VolumePopup(QWidget *parent)
     layout->setContentsMargins(8, 12, 8, 12);
     layout->setSpacing(8);
     
-    // 音量数值标签
-    m_label = new QLabel("100", this);
+    // 音量数值标签（默认静音）
+    m_label = new QLabel("0", this);
     m_label->setAlignment(Qt::AlignCenter);
     m_label->setStyleSheet("color: white; font-size: 14px; font-weight: bold;");
     m_label->setFixedHeight(20);
     
-    // 垂直音量滑块
+    // 垂直音量滑块（默认静音）
     m_slider = new QSlider(Qt::Vertical, this);
     m_slider->setRange(0, 100);
-    m_slider->setValue(100);
+    m_slider->setValue(0);
     m_slider->setStyleSheet(R"(
         QSlider::groove:vertical {
             background: #444444;
@@ -576,8 +576,8 @@ void VideoToolBarWidget::initUI()
     QHBoxLayout *rightControlLayout = new QHBoxLayout();
     rightControlLayout->setSpacing(10);
 
-    // 音量按钮
-    volumeButton = new QPushButton("🔊", this);
+    // 音量按钮（默认静音，避免多屏播放时声音混乱）
+    volumeButton = new QPushButton("🔇", this);
     volumeButton->setFixedSize(36, 30);
     volumeButton->setToolTip("音量");
     volumeButton->setStyleSheet(R"(
@@ -596,9 +596,9 @@ void VideoToolBarWidget::initUI()
         }
     )");
     
-    // 音量弹出控件
+    // 音量弹出控件（默认静音）
     volumePopup = new VolumePopup(this);
-    volumePopup->setVolume(100);
+    volumePopup->setVolume(0);
     volumePopup->hide();
 
     speedCombo = new QComboBox(this);

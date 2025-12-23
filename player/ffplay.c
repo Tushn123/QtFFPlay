@@ -2072,21 +2072,15 @@ static void audio_feed_stream(FFPlayer *ffp, VideoState *is)
         int to_write = FFMIN(len1, bytes_to_fill - bytes_filled);
         
         if (to_write > 0 && is->audio_buf) {
-            /* 应用音量 */
+            /* 直接写入原始音频数据，音量由混音器统一处理
+             * 注意：不在这里处理音量，避免双重调节导致的噪声 */
             if (is->muted) {
                 /* 静音时写入静音数据 */
                 uint8_t silence[8192] = {0};
                 audio_stream_write(stream, silence, to_write);
-            } else if (is->audio_volume == SDL_MIX_MAXVOLUME) {
-                /* 最大音量，直接写入 */
-                audio_stream_write(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, to_write);
             } else {
-                /* 需要调整音量 */
-                uint8_t temp_buf[8192];
-                memset(temp_buf, 0, to_write);
-                SDL_MixAudioFormat(temp_buf, (uint8_t *)is->audio_buf + is->audio_buf_index, 
-                                   AUDIO_S16SYS, to_write, is->audio_volume);
-                audio_stream_write(stream, temp_buf, to_write);
+                /* 写入原始数据，混音器会根据 stream->volume 调节 */
+                audio_stream_write(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, to_write);
             }
             bytes_filled += to_write;
             is->audio_buf_index += to_write;
@@ -2171,6 +2165,9 @@ int audio_open(FFPlayer *ffp, void *opaque, AVChannelLayout *wanted_channel_layo
     
     /* 保存流句柄 */
     is->mixer_stream = stream;
+    
+    /* 设置初始音量（同步 is->audio_volume 到混音器流）*/
+    audio_stream_set_volume(stream, is->audio_volume);
     
     /* 使用混音器的实际参数 */
     int mixer_rate = audio_mixer_get_sample_rate(mixer);

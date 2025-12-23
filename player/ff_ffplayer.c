@@ -22,6 +22,7 @@
 #include "ff_ffplayer.h"
 #include "ff_vout.h"
 #include "ffplay.h"
+#include "ff_audio_mixer.h"
 #include "cmdutils.h"
 #include <SDL_syswm.h>
 #include <math.h>
@@ -1062,8 +1063,14 @@ void ffp_set_volume(FFPlayer *ffp, float volume)
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;
 
-    /* 转换为 SDL 音量 (0 - SDL_MIX_MAXVOLUME) */
-    ffp->is->audio_volume = (int)(volume * SDL_MIX_MAXVOLUME);
+    /* 转换为 SDL 音量 (0 - SDL_MIX_MAXVOLUME, 即 0-128) */
+    int sdl_volume = (int)(volume * SDL_MIX_MAXVOLUME);
+    ffp->is->audio_volume = sdl_volume;
+    
+    /* 同步更新混音器流的音量（混音器也使用 0-128 范围）*/
+    if (ffp->is->mixer_stream) {
+        audio_stream_set_volume(ffp->is->mixer_stream, sdl_volume);
+    }
 }
 
 float ffp_get_volume(FFPlayer *ffp)
