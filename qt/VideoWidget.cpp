@@ -142,6 +142,7 @@ void VideoWidget::initUi()
     qDebug() << "[VideoWidget] id=" << id << "this=" << this 
              << "playerWidget=" << playerWidget << "- Setting default media:" << mediaPath;
     playerWidget->setMedia(mediaPath);
+    videoTitleBarWidget->setVideoPath(mediaPath);  // 更新标题栏路径显示
     playerWidget->show();  // 播放时显示
     playerWidget->setVolume(0);  // 默认静音，避免多屏播放时声音混乱
     playerWidget->play();

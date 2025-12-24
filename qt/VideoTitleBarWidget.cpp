@@ -1,6 +1,154 @@
 #include "VideoTitleBarWidget.h"
 #include <QFileDialog>
 #include <QStandardPaths>
+#include <QFileInfo>
+#include <QMouseEvent>
+#include <QKeyEvent>
+
+// ============ EditablePathLabel 实现 ============
+
+EditablePathLabel::EditablePathLabel(QWidget *parent)
+    : QLineEdit(parent)
+    , m_editing(false)
+{
+    setReadOnly(true);
+    setFrame(false);
+    setCursor(Qt::ArrowCursor);
+    
+    // 默认只读样式
+    setStyleSheet(R"(
+        QLineEdit {
+            background-color: transparent;
+            color: #cccccc;
+            font-size: 13px;
+            border: none;
+            padding: 2px 4px;
+        }
+        QLineEdit:hover {
+            color: white;
+        }
+    )");
+    
+    setText("双击输入视频路径...");
+    setToolTip("双击编辑路径，回车确认播放");
+}
+
+void EditablePathLabel::setPath(const QString &path)
+{
+    m_currentPath = path;
+    updateDisplayText();
+}
+
+void EditablePathLabel::updateDisplayText()
+{
+    if (m_editing) {
+        // 编辑模式显示完整路径
+        setText(m_currentPath);
+    } else {
+        // 只读模式显示文件名
+        if (m_currentPath.isEmpty()) {
+            setText("双击输入视频路径...");
+        } else {
+            QFileInfo fi(m_currentPath);
+            setText(fi.fileName());
+            setToolTip(m_currentPath + "\n双击编辑路径");
+        }
+    }
+}
+
+void EditablePathLabel::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    Q_UNUSED(event);
+    enterEditMode();
+}
+
+void EditablePathLabel::enterEditMode()
+{
+    if (m_editing) return;
+    
+    m_editing = true;
+    setReadOnly(false);
+    setCursor(Qt::IBeamCursor);
+    
+    // 编辑模式样式
+    setStyleSheet(R"(
+        QLineEdit {
+            background-color: #2a2a2a;
+            color: white;
+            font-size: 13px;
+            border: 1px solid #0078d4;
+            border-radius: 3px;
+            padding: 2px 4px;
+            selection-background-color: #0078d4;
+        }
+    )");
+    
+    setText(m_currentPath);
+    selectAll();
+    setFocus();
+}
+
+void EditablePathLabel::exitEditMode(bool confirm)
+{
+    if (!m_editing) return;
+    
+    m_editing = false;
+    setReadOnly(true);
+    setCursor(Qt::ArrowCursor);
+    
+    // 恢复只读样式
+    setStyleSheet(R"(
+        QLineEdit {
+            background-color: transparent;
+            color: #cccccc;
+            font-size: 13px;
+            border: none;
+            padding: 2px 4px;
+        }
+        QLineEdit:hover {
+            color: white;
+        }
+    )");
+    
+    if (confirm) {
+        QString newPath = text().trimmed();
+        if (!newPath.isEmpty() && newPath != m_currentPath) {
+            // 路径变化，发出信号
+            m_currentPath = newPath;
+            emit pathChanged(newPath);
+        }
+    }
+    
+    updateDisplayText();
+    clearFocus();
+}
+
+void EditablePathLabel::focusOutEvent(QFocusEvent *event)
+{
+    QLineEdit::focusOutEvent(event);
+    if (m_editing) {
+        exitEditMode(true);  // 失去焦点时确认
+    }
+}
+
+void EditablePathLabel::keyPressEvent(QKeyEvent *event)
+{
+    if (m_editing) {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            exitEditMode(true);  // 回车确认
+            return;
+        } else if (event->key() == Qt::Key_Escape) {
+            exitEditMode(false);  // Esc 取消
+            return;
+        }
+    }
+    QLineEdit::keyPressEvent(event);
+}
+
+void EditablePathLabel::onEditingFinished()
+{
+    // 由 focusOutEvent 和 keyPressEvent 处理
+}
 
 // 下拉框通用样式
 static const char* comboBoxStyle = R"(
@@ -66,15 +214,10 @@ void VideoTitleBarWidget::initUI()
     mainLayout->setContentsMargins(10, 5, 10, 5);
     mainLayout->setSpacing(10);
     
-    // 左侧：标题
-    titleLabel = new QLabel("视频播放器", this);
-    titleLabel->setStyleSheet(R"(
-        QLabel {
-            color: white;
-            font-size: 14px;
-            font-weight: bold;
-        }
-    )");
+    // 左侧：可编辑路径标签
+    titleEdit = new EditablePathLabel(this);
+    titleEdit->setMinimumWidth(150);
+    titleEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     
     // 打开文件按钮
     openButton = new QPushButton("📂 打开", this);
@@ -107,9 +250,8 @@ void VideoTitleBarWidget::initUI()
     scaleModeCombo->setStyleSheet(comboBoxStyle);
     
     // 添加到布局
-    mainLayout->addWidget(titleLabel);
+    mainLayout->addWidget(titleEdit, 1);  // 路径占用剩余空间
     mainLayout->addWidget(openButton);
-    mainLayout->addStretch();
     mainLayout->addWidget(scaleModeCombo);
 }
 
@@ -119,6 +261,8 @@ void VideoTitleBarWidget::initConnect()
             this, &VideoTitleBarWidget::onScaleModeComboChanged);
     connect(openButton, &QPushButton::clicked,
             this, &VideoTitleBarWidget::onOpenButtonClicked);
+    connect(titleEdit, &EditablePathLabel::pathChanged,
+            this, &VideoTitleBarWidget::onPathEdited);
 }
 
 void VideoTitleBarWidget::onScaleModeComboChanged(int index)
@@ -129,8 +273,16 @@ void VideoTitleBarWidget::onScaleModeComboChanged(int index)
 
 void VideoTitleBarWidget::onOpenButtonClicked()
 {
-    // 获取默认目录（视频文件夹或上次打开的目录）
-    QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    // 获取默认目录（当前路径的目录或视频文件夹）
+    QString currentPath = titleEdit->path();
+    QString defaultDir;
+    if (!currentPath.isEmpty()) {
+        QFileInfo fi(currentPath);
+        defaultDir = fi.absolutePath();
+    }
+    if (defaultDir.isEmpty() || !QFileInfo::exists(defaultDir)) {
+        defaultDir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    }
     
     // 打开文件选择对话框
     QString filePath = QFileDialog::getOpenFileName(
@@ -143,7 +295,16 @@ void VideoTitleBarWidget::onOpenButtonClicked()
     
     // 如果用户选择了文件
     if (!filePath.isEmpty()) {
+        titleEdit->setPath(filePath);
         emit openFileRequested(filePath);
+    }
+}
+
+void VideoTitleBarWidget::onPathEdited(const QString &newPath)
+{
+    // 用户手动编辑了路径，发出打开文件信号
+    if (!newPath.isEmpty()) {
+        emit openFileRequested(newPath);
     }
 }
 
@@ -159,4 +320,14 @@ ScaleMode VideoTitleBarWidget::scaleMode() const
 {
     int index = scaleModeCombo->currentIndex();
     return static_cast<ScaleMode>(scaleModeCombo->itemData(index).toInt());
+}
+
+void VideoTitleBarWidget::setVideoPath(const QString &path)
+{
+    titleEdit->setPath(path);
+}
+
+QString VideoTitleBarWidget::videoPath() const
+{
+    return titleEdit->path();
 }
