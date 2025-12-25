@@ -29,8 +29,8 @@ EditablePathLabel::EditablePathLabel(QWidget *parent)
         }
     )");
     
-    setText("双击输入视频路径...");
-    setToolTip("双击编辑路径，回车确认播放");
+    setText("双击输入url...");
+    setToolTip("双击编辑url，回车确认播放");
 }
 
 void EditablePathLabel::setPath(const QString &path)
@@ -47,7 +47,7 @@ void EditablePathLabel::updateDisplayText()
     } else {
         // 只读模式显示文件名
         if (m_currentPath.isEmpty()) {
-            setText("双击输入视频路径...");
+            setText("双击输入url...");
         } else {
             QFileInfo fi(m_currentPath);
             setText(fi.fileName());
@@ -356,4 +356,10 @@ void VideoTitleBarWidget::setLiveMode(bool isLive)
         liveIndicator->hide();
         qDebug() << "[VideoTitleBarWidget] Live mode disabled";
     }
+}
+
+void VideoTitleBarWidget::clear()
+{
+    titleEdit->setPath("");     // 清空路径，显示默认提示文字
+    liveIndicator->hide();      // 隐藏直播指示器
 }

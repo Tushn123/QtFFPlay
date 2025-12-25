@@ -75,6 +75,12 @@ public:
      * @param isLive 是否为直播
      */
     void setLiveMode(bool isLive);
+    
+    /**
+     * 清空标题栏内容
+     * 清空视频路径和隐藏直播指示器
+     */
+    void clear();
 
 signals:
     /**

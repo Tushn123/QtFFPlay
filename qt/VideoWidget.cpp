@@ -262,4 +262,9 @@ void VideoWidget::stopAndReset()
         videoToolBarWidget->setDuration(0);
         videoToolBarWidget->setProgress(0);
     }
+    
+    // 3. 清空标题栏
+    if (videoTitleBarWidget) {
+        videoTitleBarWidget->clear();
+    }
 }
