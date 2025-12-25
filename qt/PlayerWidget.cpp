@@ -29,6 +29,47 @@ extern "C" {
 
 /*
  * =============================================================================
+ * 辅助函数
+ * =============================================================================
+ */
+
+// 检测是否为直播流 URL（用于跳过不适用的功能，如缩略图提取）
+bool PlayerWidget::isLiveUrl(const QString &url)
+{
+    if (url.isEmpty())
+        return false;
+    
+    // 基于 URL 协议检测
+    if (url.startsWith("rtmp://", Qt::CaseInsensitive) ||
+        url.startsWith("rtmps://", Qt::CaseInsensitive) ||
+        url.startsWith("rtmpt://", Qt::CaseInsensitive) ||
+        url.startsWith("rtsp://", Qt::CaseInsensitive) ||
+        url.startsWith("rtsps://", Qt::CaseInsensitive) ||
+        url.startsWith("rtp://", Qt::CaseInsensitive) ||
+        url.startsWith("udp://", Qt::CaseInsensitive) ||
+        url.startsWith("srt://", Qt::CaseInsensitive)) {
+        return true;
+    }
+    
+    // HTTP-FLV 直播流检测
+    if (url.contains(".flv", Qt::CaseInsensitive) &&
+        (url.startsWith("http://", Qt::CaseInsensitive) || 
+         url.startsWith("https://", Qt::CaseInsensitive))) {
+        return true;
+    }
+    
+    // HLS 直播流检测
+    if (url.contains(".m3u8", Qt::CaseInsensitive) &&
+        (url.startsWith("http://", Qt::CaseInsensitive) || 
+         url.startsWith("https://", Qt::CaseInsensitive))) {
+        return true;
+    }
+    
+    return false;
+}
+
+/*
+ * =============================================================================
  * 硬件加速配置（唯一入口）
  * =============================================================================
  * PlayerWidget 是硬件加速类型的唯一配置入口。
@@ -68,6 +109,8 @@ PlayerWidget::PlayerWidget(QWidget *parent)
     , m_spacePressed(false)
     , m_isPanning(false)
     , m_lastMousePos(0, 0)
+    , m_mediaType(MediaType::Unknown)
+    , m_isSeekable(true)
 {
     // 设置焦点策略以接收键盘事件
     setFocusPolicy(Qt::StrongFocus);
@@ -302,8 +345,9 @@ void PlayerWidget::setMedia(const QString &path)
     qDebug() << "Data source set, state:" << mp_get_state(m_mp);
     
     // 打开缩略图提取器（用于进度条预览）
-    // 硬件加速配置与播放器保持一致（封装性：统一由 PlayerWidget 管理）
-    if (m_thumbnailExtractor) {
+    // 注意：直播流不支持预览（不能 seek），跳过 ThumbnailExtractor
+    // 这也避免了在 UI 线程中同步打开网络流导致界面卡死
+    if (m_thumbnailExtractor && !isLiveUrl(m_mediaPath)) {
         // 转换 PlayerWidget 的硬件加速类型到 ThumbnailExtractor 的类型
         ThumbnailHWAccelType thumbHWType = ThumbnailHWAccelType::None;
         switch (m_hwAccelType) {
@@ -319,6 +363,8 @@ void PlayerWidget::setMedia(const QString &path)
         }
         m_thumbnailExtractor->setHWAccelType(thumbHWType);
         m_thumbnailExtractor->open(m_mediaPath);
+    } else if (isLiveUrl(m_mediaPath)) {
+        qDebug() << "[PlayerWidget] Live stream detected, skipping ThumbnailExtractor";
     }
     
     // 启动消息循环线程（ijkplayer 风格：上层驱动消息循环）
@@ -336,22 +382,33 @@ void PlayerWidget::setMedia(const QString &path)
 
 void PlayerWidget::play()
 {
+    qDebug() << "[PlayerWidget] play() called, m_mp=" << m_mp;
     if (!m_mp) {
+        qDebug() << "[PlayerWidget] play() - no media player";
         return;
     }
     
     int state = mp_get_state(m_mp);
+    qDebug() << "[PlayerWidget] play() - current state:" << state;
     
     // 如果还在准备中，设置标志，等准备完成后自动播放
     if (state == MP_STATE_ASYNC_PREPARING) {
-        qDebug() << "[PlayerWidget] Still preparing, will start on prepared";
+        qDebug() << "[PlayerWidget] Still preparing (state=2), will start on prepared";
         m_startOnPrepared = true;
         return;
     }
     
+    // 如果状态是 ERROR，不要尝试播放
+    if (state == MP_STATE_ERROR) {
+        qWarning() << "[PlayerWidget] Cannot play in ERROR state (state=8)";
+        return;
+    }
+    
     // 其他状态，直接调用 mp_start
+    qDebug() << "[PlayerWidget] Calling mp_start, state before:" << state;
     int ret = mp_start(m_mp);
-    qDebug() << "mp_start returned:" << ret << ", state:" << state;
+    int stateAfter = mp_get_state(m_mp);
+    qDebug() << "[PlayerWidget] mp_start returned:" << ret << ", state before:" << state << ", state after:" << stateAfter;
     
     // 确保定时器启动
     if (ret >= 0 && m_positionTimer && !m_positionTimer->isActive()) {
@@ -758,6 +815,20 @@ void PlayerWidget::onMessage(int what, int arg1, int arg2)
         qDebug() << "[MSG] AUDIO_RENDERING_START";
         break;
         
+    case FFP_MSG_MEDIA_TYPE_CHANGED:
+        {
+            // arg1 = media_type, arg2 = is_seekable
+            m_mediaType = static_cast<MediaType>(arg1);
+            m_isSeekable = (arg2 != 0);
+            
+            const char* typeNames[] = {"Unknown", "File", "VOD", "Live", "Playback"};
+            qDebug() << "[MSG] MEDIA_TYPE_CHANGED:" << typeNames[arg1] 
+                     << ", seekable:" << m_isSeekable;
+            
+            emit mediaTypeChanged(m_mediaType, m_isSeekable);
+        }
+        break;
+        
     default:
         // 忽略未处理的消息
         break;
@@ -981,4 +1052,41 @@ QString PlayerWidget::hwAccelName(HWAccelType type)
 {
     const char *name = mp_get_hwaccel_name(static_cast<MPHWAccelType>(static_cast<int>(type)));
     return QString::fromUtf8(name);
+}
+
+/*
+ * =============================================================================
+ * 媒体类型相关方法
+ * =============================================================================
+ */
+
+PlayerWidget::MediaType PlayerWidget::mediaType() const
+{
+    return m_mediaType;
+}
+
+bool PlayerWidget::isLive() const
+{
+    return m_mediaType == MediaType::Live;
+}
+
+bool PlayerWidget::isSeekable() const
+{
+    return m_isSeekable;
+}
+
+void PlayerWidget::setLiveLowLatency(bool enabled)
+{
+    if (m_mp) {
+        mp_set_live_low_latency(m_mp, enabled ? 1 : 0);
+        qDebug() << "[PlayerWidget] Live low latency:" << (enabled ? "enabled" : "disabled");
+    }
+}
+
+void PlayerWidget::setTimeout(int timeoutMs)
+{
+    if (m_mp) {
+        mp_set_timeout(m_mp, timeoutMs);
+        qDebug() << "[PlayerWidget] Timeout set to:" << timeoutMs << "ms";
+    }
 }

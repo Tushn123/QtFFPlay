@@ -62,6 +62,24 @@ typedef enum FFPRenderMode {
  * =============================================================================
  */
 
+/*
+ * =============================================================================
+ * 媒体类型定义
+ * =============================================================================
+ */
+
+/**
+ * 媒体类型枚举
+ * 用于区分不同类型的媒体源，以便 UI 层做相应适配
+ */
+typedef enum FFPMediaType {
+    FFP_MEDIA_TYPE_UNKNOWN = 0,   /* 未知类型 */
+    FFP_MEDIA_TYPE_FILE,          /* 本地文件 */
+    FFP_MEDIA_TYPE_VOD,           /* 点播（网络文件，可 seek）*/
+    FFP_MEDIA_TYPE_LIVE,          /* 直播（实时流，不可 seek）*/
+    FFP_MEDIA_TYPE_PLAYBACK,      /* 回放（直播录像，可能支持有限 seek）*/
+} FFPMediaType;
+
 /**
  * 硬件加速类型枚举
  * 
@@ -249,6 +267,19 @@ typedef struct FFPlayer {
     /* 回调渲染相关 */
     ffp_video_frame_callback video_frame_cb;
     void *video_frame_cb_opaque;
+
+    /* 直播流相关参数 */
+    FFPMediaType media_type;          /* 媒体类型 */
+    int is_realtime;                  /* 是否实时流（直播）*/
+    int is_seekable;                  /* 是否可 seek */
+    
+    /* 直播优化选项 */
+    int live_low_latency;             /* 低延迟模式 (0=关闭, 1=开启) */
+    int live_max_buffer_ms;           /* 最大缓冲时长（毫秒），超过则丢帧追赶 */
+    int live_reconnect;               /* 自动重连 (0=关闭, 1=开启) */
+    int live_reconnect_delay_ms;      /* 重连延迟（毫秒）*/
+    int live_reconnect_max;           /* 最大重连次数 (0=无限) */
+    int live_timeout_ms;              /* 网络超时（毫秒）*/
 
 } FFPlayer;
 
@@ -716,5 +747,61 @@ const char *ffp_get_hwaccel_name(FFPHWAccelType type);
  * @return 0=成功, <0=失败
  */
 int ffp_switch_hwaccel(FFPlayer *ffp, FFPHWAccelType type);
+
+/*
+ * =============================================================================
+ * 直播流控制
+ * =============================================================================
+ */
+
+/**
+ * 获取媒体类型
+ * @return 媒体类型枚举值
+ */
+FFPMediaType ffp_get_media_type(FFPlayer *ffp);
+
+/**
+ * 是否为实时流（直播）
+ * @return 1=直播, 0=非直播
+ */
+int ffp_is_realtime(FFPlayer *ffp);
+
+/**
+ * 是否可 seek
+ * @return 1=可 seek, 0=不可 seek
+ */
+int ffp_is_seekable(FFPlayer *ffp);
+
+/**
+ * 设置低延迟模式
+ * @param enabled 1=开启, 0=关闭
+ */
+void ffp_set_live_low_latency(FFPlayer *ffp, int enabled);
+
+/**
+ * 设置直播缓冲参数
+ * @param max_buffer_ms 最大缓冲时长（毫秒）
+ */
+void ffp_set_live_max_buffer(FFPlayer *ffp, int max_buffer_ms);
+
+/**
+ * 设置网络超时
+ * @param timeout_ms 超时时长（毫秒）
+ */
+void ffp_set_timeout(FFPlayer *ffp, int timeout_ms);
+
+/**
+ * 设置自动重连参数
+ * @param enabled 是否启用
+ * @param delay_ms 重连延迟（毫秒）
+ * @param max_count 最大重连次数（0=无限）
+ */
+void ffp_set_reconnect(FFPlayer *ffp, int enabled, int delay_ms, int max_count);
+
+/**
+ * 应用直播优化选项到 format_opts
+ * 在 ffp_prepare_async 之前调用以生效
+ */
+void ffp_apply_live_options(FFPlayer *ffp);
 
 #endif /* FF_FFPLAYER_H */

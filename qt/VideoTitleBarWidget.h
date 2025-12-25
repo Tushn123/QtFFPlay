@@ -68,6 +68,13 @@ public:
      * 获取当前视频路径
      */
     QString videoPath() const;
+    
+    /**
+     * 设置直播模式
+     * 直播模式下显示直播标识
+     * @param isLive 是否为直播
+     */
+    void setLiveMode(bool isLive);
 
 signals:
     /**
@@ -95,6 +102,7 @@ private:
     void initConnect();
 
     EditablePathLabel *titleEdit;
+    QLabel *liveIndicator;
 };
 
 #endif // VIDEOTITLEBARWIDGET_H

@@ -146,6 +146,19 @@ public:
     
     // 设置预览图片（用于进度条悬停预览）
     void setPreviewImage(const QImage &image);
+    
+    /**
+     * 设置直播模式
+     * 直播模式下隐藏进度条和时间显示，显示直播标识
+     * @param isLive 是否为直播
+     * @param seekable 是否可 seek（回放流可能支持有限 seek）
+     */
+    void setLiveMode(bool isLive, bool seekable = false);
+    
+    /**
+     * 是否处于直播模式
+     */
+    bool isLiveMode() const { return m_isLiveMode; }
 
 protected:
     void initUI();
@@ -209,6 +222,10 @@ public:
     qint64 duration_;
     int volume_;
     bool muted_;
+    bool m_isLiveMode;
+    
+    // 直播模式控件
+    QLabel *liveIndicator;
 };
 
 #endif // VIDEOTOOLBARWIDGET_H

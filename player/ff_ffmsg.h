@@ -90,6 +90,7 @@
  * =============================================================================
  */
 #define FFP_MSG_PLAYBACK_STATE_CHANGED      700
+#define FFP_MSG_MEDIA_TYPE_CHANGED          701     /* arg1 = media_type (FFPMediaType), arg2 = is_seekable */
 
 /*
  * =============================================================================

@@ -481,6 +481,61 @@ int mp_get_loop(MediaPlayer *mp);
 
 /*
  * =============================================================================
+ * 直播流控制
+ * =============================================================================
+ */
+
+/**
+ * 媒体类型枚举（对应 FFPMediaType）
+ */
+typedef enum {
+    MP_MEDIA_TYPE_UNKNOWN = 0,
+    MP_MEDIA_TYPE_FILE,
+    MP_MEDIA_TYPE_VOD,
+    MP_MEDIA_TYPE_LIVE,
+    MP_MEDIA_TYPE_PLAYBACK,
+} MPMediaType;
+
+/**
+ * 获取媒体类型
+ * @return 媒体类型
+ */
+MPMediaType mp_get_media_type(MediaPlayer *mp);
+
+/**
+ * 是否为实时流（直播）
+ * @return 1=直播, 0=非直播
+ */
+int mp_is_realtime(MediaPlayer *mp);
+
+/**
+ * 是否可 seek
+ * @return 1=可 seek, 0=不可 seek
+ */
+int mp_is_seekable(MediaPlayer *mp);
+
+/**
+ * 设置低延迟模式（需在 prepare 之前调用）
+ */
+void mp_set_live_low_latency(MediaPlayer *mp, int enabled);
+
+/**
+ * 设置直播缓冲参数
+ */
+void mp_set_live_max_buffer(MediaPlayer *mp, int max_buffer_ms);
+
+/**
+ * 设置网络超时
+ */
+void mp_set_timeout(MediaPlayer *mp, int timeout_ms);
+
+/**
+ * 设置自动重连参数
+ */
+void mp_set_reconnect(MediaPlayer *mp, int enabled, int delay_ms, int max_count);
+
+/*
+ * =============================================================================
  * 选项设置
  * =============================================================================
  */

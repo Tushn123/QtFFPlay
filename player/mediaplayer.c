@@ -899,6 +899,89 @@ int mp_get_loop(MediaPlayer *mp)
 
 /*
  * =============================================================================
+ * 直播流控制
+ * =============================================================================
+ */
+
+MPMediaType mp_get_media_type(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return MP_MEDIA_TYPE_UNKNOWN;
+    
+    pthread_mutex_lock(&mp->mutex);
+    FFPMediaType type = ffp_get_media_type(mp->ffplayer);
+    pthread_mutex_unlock(&mp->mutex);
+    
+    /* 转换 FFPMediaType 到 MPMediaType */
+    return (MPMediaType)type;
+}
+
+int mp_is_realtime(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return 0;
+    
+    pthread_mutex_lock(&mp->mutex);
+    int ret = ffp_is_realtime(mp->ffplayer);
+    pthread_mutex_unlock(&mp->mutex);
+    
+    return ret;
+}
+
+int mp_is_seekable(MediaPlayer *mp)
+{
+    if (!mp || !mp->ffplayer)
+        return 0;
+    
+    pthread_mutex_lock(&mp->mutex);
+    int ret = ffp_is_seekable(mp->ffplayer);
+    pthread_mutex_unlock(&mp->mutex);
+    
+    return ret;
+}
+
+void mp_set_live_low_latency(MediaPlayer *mp, int enabled)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    pthread_mutex_lock(&mp->mutex);
+    ffp_set_live_low_latency(mp->ffplayer, enabled);
+    pthread_mutex_unlock(&mp->mutex);
+}
+
+void mp_set_live_max_buffer(MediaPlayer *mp, int max_buffer_ms)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    pthread_mutex_lock(&mp->mutex);
+    ffp_set_live_max_buffer(mp->ffplayer, max_buffer_ms);
+    pthread_mutex_unlock(&mp->mutex);
+}
+
+void mp_set_timeout(MediaPlayer *mp, int timeout_ms)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    pthread_mutex_lock(&mp->mutex);
+    ffp_set_timeout(mp->ffplayer, timeout_ms);
+    pthread_mutex_unlock(&mp->mutex);
+}
+
+void mp_set_reconnect(MediaPlayer *mp, int enabled, int delay_ms, int max_count)
+{
+    if (!mp || !mp->ffplayer)
+        return;
+    
+    pthread_mutex_lock(&mp->mutex);
+    ffp_set_reconnect(mp->ffplayer, enabled, delay_ms, max_count);
+    pthread_mutex_unlock(&mp->mutex);
+}
+
+/*
+ * =============================================================================
  * 选项设置
  * =============================================================================
  */
@@ -1035,13 +1118,17 @@ int mp_get_msg(MediaPlayer *mp, AVMessage *msg, int block)
             break;
             
         case FFP_MSG_PREPARED:
-            av_log(NULL, AV_LOG_INFO, "[mp_get_msg] FFP_MSG_PREPARED\n");
+            fprintf(stderr, "[mp_get_msg] FFP_MSG_PREPARED, current state=%d\n", mp->mp_state);
+            fflush(stderr);
             pthread_mutex_lock(&mp->mutex);
             if (mp->mp_state == MP_STATE_ASYNC_PREPARING) {
                 mp_change_state_l(mp, MP_STATE_PREPARED);
+                fprintf(stderr, "[mp_get_msg] State changed to PREPARED (3)\n");
+                fflush(stderr);
             } else {
-                av_log(NULL, AV_LOG_WARNING, 
-                       "[mp_get_msg] FFP_MSG_PREPARED: unexpected state %d\n", mp->mp_state);
+                fprintf(stderr, "[mp_get_msg] FFP_MSG_PREPARED: unexpected state %d (expected %d)\n", 
+                       mp->mp_state, MP_STATE_ASYNC_PREPARING);
+                fflush(stderr);
             }
             pthread_mutex_unlock(&mp->mutex);
             break;
@@ -1056,9 +1143,12 @@ int mp_get_msg(MediaPlayer *mp, AVMessage *msg, int block)
             break;
             
         case FFP_MSG_ERROR:
-            av_log(NULL, AV_LOG_ERROR, "[mp_get_msg] FFP_MSG_ERROR: %d\n", msg->arg1);
+            fprintf(stderr, "[mp_get_msg] FFP_MSG_ERROR: %d, current state=%d\n", msg->arg1, mp->mp_state);
+            fflush(stderr);
             pthread_mutex_lock(&mp->mutex);
             mp_change_state_l(mp, MP_STATE_ERROR);
+            fprintf(stderr, "[mp_get_msg] State changed to ERROR (8)\n");
+            fflush(stderr);
             pthread_mutex_unlock(&mp->mutex);
             break;
             

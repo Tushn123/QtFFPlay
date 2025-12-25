@@ -457,6 +457,8 @@ VideoToolBarWidget::VideoToolBarWidget(QWidget *parent)
     , duration_(0)
     , volume_(0)
     , muted_(false)
+    , m_isLiveMode(false)
+    , liveIndicator(nullptr)
 {
     initUI();
     initConnect();
@@ -489,6 +491,20 @@ void VideoToolBarWidget::initUI()
     timeLabel = new QLabel("00:00 / 00:00", this);
     timeLabel->setStyleSheet("color: white; font-size: 12px;");
     timeLabel->setMinimumWidth(120);  // 支持 h:mm:ss / h:mm:ss 格式
+    
+    // 直播指示器（默认隐藏）
+    liveIndicator = new QLabel("● LIVE", this);
+    liveIndicator->setStyleSheet(R"(
+        QLabel {
+            color: #ff4444;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 2px 8px;
+            background-color: rgba(255, 68, 68, 30);
+            border-radius: 4px;
+        }
+    )");
+    liveIndicator->hide();
 
     // 进度条（使用自定义进度条，支持点击跳转和时间提示）
     progressSlider = new VideoProgressSlider(this);
@@ -496,6 +512,7 @@ void VideoToolBarWidget::initUI()
 
     // 添加上方区域控件
     topLayout->addWidget(timeLabel, 0, Qt::AlignLeft);
+    topLayout->addWidget(liveIndicator, 0, Qt::AlignLeft);
     topLayout->addWidget(progressSlider, 1); // 拉伸因子为1，撑满剩余宽度
 
     // ============ 下方区域：播放控制按钮 ============
@@ -728,6 +745,29 @@ void VideoToolBarWidget::setDuration(qint64 milliseconds)
 void VideoToolBarWidget::setPreviewImage(const QImage &image)
 {
     progressSlider->setPreviewImage(image);
+}
+
+void VideoToolBarWidget::setLiveMode(bool isLive, bool seekable)
+{
+    m_isLiveMode = isLive;
+    
+    if (isLive) {
+        // 直播模式：隐藏时间和进度条，显示直播标识
+        timeLabel->hide();
+        progressSlider->setVisible(seekable);  // 回放流可能支持 seek
+        progressSlider->setEnabled(seekable);
+        liveIndicator->show();
+        
+        qDebug() << "[VideoToolBarWidget] Live mode enabled, seekable:" << seekable;
+    } else {
+        // 点播/文件模式：显示时间和进度条，隐藏直播标识
+        timeLabel->show();
+        progressSlider->setVisible(true);
+        progressSlider->setEnabled(true);
+        liveIndicator->hide();
+        
+        qDebug() << "[VideoToolBarWidget] Live mode disabled";
+    }
 }
 
 void VideoToolBarWidget::updateTimeDisplay()

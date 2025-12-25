@@ -91,6 +91,14 @@ void VideoWidget::initUi()
     connect(playerWidget, &PlayerWidget::previewFrameReady,
             videoToolBarWidget, &VideoToolBarWidget::setPreviewImage);
     
+    // 媒体类型变化 -> 更新工具栏模式
+    connect(playerWidget, &PlayerWidget::mediaTypeChanged,
+            this, [this](PlayerWidget::MediaType type, bool seekable) {
+        bool isLive = (type == PlayerWidget::MediaType::Live);
+        videoToolBarWidget->setLiveMode(isLive, seekable);
+        videoTitleBarWidget->setLiveMode(isLive);
+    });
+    
     // 工具栏倍速选择 -> 播放器倍速设置
     connect(videoToolBarWidget, &VideoToolBarWidget::speedChanged,
             this, [this](float speed) {
@@ -138,12 +146,12 @@ void VideoWidget::initUi()
     });
 
     // 设置默认媒体文件（可选：启动时自动播放）
-    QString mediaPath = "C:/shn/media/animal.mp4";
-    qDebug() << "[VideoWidget] id=" << id << "this=" << this 
-             << "playerWidget=" << playerWidget << "- Setting default media:" << mediaPath;
-    playerWidget->setMedia(mediaPath);
-    videoTitleBarWidget->setVideoPath(mediaPath);  // 更新标题栏路径显示
-    playerWidget->show();  // 播放时显示
+    // QString mediaPath = "C:/shn/media/animal.mp4";
+    // qDebug() << "[VideoWidget] id=" << id << "this=" << this
+    //          << "playerWidget=" << playerWidget << "- Setting default media:" << mediaPath;
+    // playerWidget->setMedia(mediaPath);
+    // videoTitleBarWidget->setVideoPath(mediaPath);  // 更新标题栏路径显示
+    // playerWidget->show();  // 播放时显示
     playerWidget->setVolume(0);  // 默认静音，避免多屏播放时声音混乱
     playerWidget->play();
 

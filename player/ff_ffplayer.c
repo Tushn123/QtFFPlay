@@ -267,6 +267,17 @@ void ffp_set_defaults(FFPlayer *ffp)
     ffp->render_mode = FFP_RENDER_MODE_SDL;
     ffp->video_frame_cb = NULL;
     ffp->video_frame_cb_opaque = NULL;
+    
+    /* 直播流相关 - 默认值 */
+    ffp->media_type = FFP_MEDIA_TYPE_UNKNOWN;
+    ffp->is_realtime = 0;
+    ffp->is_seekable = 1;
+    ffp->live_low_latency = 0;
+    ffp->live_max_buffer_ms = 3000;        /* 默认最大缓冲 3 秒 */
+    ffp->live_reconnect = 1;               /* 默认开启重连 */
+    ffp->live_reconnect_delay_ms = 1000;   /* 默认重连延迟 1 秒 */
+    ffp->live_reconnect_max = 5;           /* 默认最多重连 5 次 */
+    ffp->live_timeout_ms = 10000;          /* 默认超时 10 秒 */
 }
 
 FFPlayer *ffp_create(void)
@@ -899,22 +910,26 @@ int ffp_prepare_async(FFPlayer *ffp, const char *file_name)
     }
 
     /* 调用 stream_open 创建 VideoState */
+    fprintf(stderr, "[PREPARE] Calling stream_open for: %s\n", ffp->input_filename);
+    fflush(stderr);
     ffp->is = stream_open(ffp, ffp->input_filename, ffp->iformat);
     if (!ffp->is) {
-        av_log(NULL, AV_LOG_ERROR, "ffp_prepare_async: stream_open failed\n");
+        fprintf(stderr, "[PREPARE] stream_open failed!\n");
+        fflush(stderr);
         /* 发送错误消息 */
         ffp_notify_msg2(ffp, FFP_MSG_ERROR, -1);
         return -1;
     }
+    fprintf(stderr, "[PREPARE] stream_open succeeded, is=%p, read_tid=%p\n", 
+           (void*)ffp->is, (void*)ffp->is->read_tid);
+    fflush(stderr);
 
-    ffp->prepared = 1;
-    
     /* 
-     * 发送 FFP_MSG_PREPARED 消息
-     * 注意：这里是简化实现。更准确的做法是在 read_thread 中
-     * 当所有流都打开并准备好后再发送。
+     * 注意：不在这里发送 FFP_MSG_PREPARED！
+     * FFP_MSG_PREPARED 应该由 read_thread 在真正打开媒体并准备好流后发送
+     * 这样可以确保在 PREPARED 状态时，媒体确实已经可以播放
+     * 如果在这里发送，而 read_thread 中打开媒体失败，会导致状态混乱
      */
-    ffp_notify_msg1(ffp, FFP_MSG_PREPARED);
     
     /* 注意：SDL 模式下渲染线程将在视频流打开后（video_open）自动启动 */
     return 0;
@@ -1626,4 +1641,116 @@ int ffp_switch_hwaccel(FFPlayer *ffp, FFPHWAccelType type)
            ffp_get_hwaccel_name(ffp->hwaccel_type));
     
     return 0;
+}
+
+/*
+ * =============================================================================
+ * 直播流控制
+ * =============================================================================
+ */
+
+FFPMediaType ffp_get_media_type(FFPlayer *ffp)
+{
+    if (!ffp)
+        return FFP_MEDIA_TYPE_UNKNOWN;
+    return ffp->media_type;
+}
+
+int ffp_is_realtime(FFPlayer *ffp)
+{
+    if (!ffp)
+        return 0;
+    return ffp->is_realtime;
+}
+
+int ffp_is_seekable(FFPlayer *ffp)
+{
+    if (!ffp)
+        return 0;
+    return ffp->is_seekable;
+}
+
+void ffp_set_live_low_latency(FFPlayer *ffp, int enabled)
+{
+    if (!ffp)
+        return;
+    ffp->live_low_latency = enabled ? 1 : 0;
+    av_log(NULL, AV_LOG_INFO, "[LIVE] Low latency mode: %s\n", 
+           enabled ? "enabled" : "disabled");
+}
+
+void ffp_set_live_max_buffer(FFPlayer *ffp, int max_buffer_ms)
+{
+    if (!ffp)
+        return;
+    ffp->live_max_buffer_ms = max_buffer_ms > 0 ? max_buffer_ms : 3000;
+    av_log(NULL, AV_LOG_INFO, "[LIVE] Max buffer: %d ms\n", ffp->live_max_buffer_ms);
+}
+
+void ffp_set_timeout(FFPlayer *ffp, int timeout_ms)
+{
+    if (!ffp)
+        return;
+    ffp->live_timeout_ms = timeout_ms > 0 ? timeout_ms : 10000;
+}
+
+void ffp_set_reconnect(FFPlayer *ffp, int enabled, int delay_ms, int max_count)
+{
+    if (!ffp)
+        return;
+    ffp->live_reconnect = enabled ? 1 : 0;
+    ffp->live_reconnect_delay_ms = delay_ms > 0 ? delay_ms : 1000;
+    ffp->live_reconnect_max = max_count >= 0 ? max_count : 5;
+    av_log(NULL, AV_LOG_INFO, "[LIVE] Reconnect: %s, delay=%dms, max=%d\n",
+           enabled ? "enabled" : "disabled",
+           ffp->live_reconnect_delay_ms,
+           ffp->live_reconnect_max);
+}
+
+void ffp_apply_live_options(FFPlayer *ffp)
+{
+    if (!ffp)
+        return;
+    
+    char value[64];
+    
+    /* 网络超时 (微秒) - RTSP 使用 stimeout */
+    snprintf(value, sizeof(value), "%d", ffp->live_timeout_ms * 1000);
+    av_dict_set(&ffp->format_opts, "stimeout", value, 0);
+    
+    /* 通用超时选项（用于 HTTP 等）*/
+    snprintf(value, sizeof(value), "%d", ffp->live_timeout_ms * 1000);
+    av_dict_set(&ffp->format_opts, "timeout", value, 0);
+    
+    /* RTSP 使用 TCP 传输（更稳定）*/
+    av_dict_set(&ffp->format_opts, "rtsp_transport", "tcp", 0);
+    
+    /* 默认为直播流设置合理的探测参数，加速连接 */
+    av_dict_set(&ffp->format_opts, "analyzeduration", "2000000", 0);  /* 2 秒 */
+    av_dict_set(&ffp->format_opts, "probesize", "2000000", 0);        /* 2MB */
+    
+    /* 允许无效数据 */
+    av_dict_set(&ffp->format_opts, "err_detect", "ignore_err", 0);
+    
+    /* 重连选项 (主要用于 HTTP 流) */
+    if (ffp->live_reconnect) {
+        av_dict_set(&ffp->format_opts, "reconnect", "1", 0);
+        av_dict_set(&ffp->format_opts, "reconnect_streamed", "1", 0);
+        snprintf(value, sizeof(value), "%d", ffp->live_reconnect_delay_ms / 1000);
+        av_dict_set(&ffp->format_opts, "reconnect_delay_max", value, 0);
+    }
+    
+    /* 低延迟选项 */
+    if (ffp->live_low_latency) {
+        av_dict_set(&ffp->format_opts, "fflags", "nobuffer", 0);
+        av_dict_set(&ffp->format_opts, "flags", "low_delay", 0);
+        av_dict_set(&ffp->format_opts, "analyzeduration", "500000", 0);  /* 0.5 秒 */
+        av_dict_set(&ffp->format_opts, "probesize", "500000", 0);        /* 500KB */
+        
+        /* 减少音频缓冲 */
+        av_dict_set(&ffp->format_opts, "framedrop", "1", 0);
+    }
+    
+    av_log(NULL, AV_LOG_INFO, "[LIVE] Options applied: timeout=%dms, low_latency=%d, reconnect=%d\n",
+           ffp->live_timeout_ms, ffp->live_low_latency, ffp->live_reconnect);
 }

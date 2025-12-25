@@ -136,6 +136,43 @@ public:
      */
     static QString hwAccelName(HWAccelType type);
 
+    /**
+     * 媒体类型枚举
+     */
+    enum class MediaType {
+        Unknown = 0,   // 未知
+        File,          // 本地文件
+        VOD,           // 点播（网络文件，可 seek）
+        Live,          // 直播（实时流，不可 seek）
+        Playback       // 回放
+    };
+    Q_ENUM(MediaType)
+    
+    /**
+     * 获取当前媒体类型
+     */
+    MediaType mediaType() const;
+    
+    /**
+     * 是否为直播流
+     */
+    bool isLive() const;
+    
+    /**
+     * 是否可 seek
+     */
+    bool isSeekable() const;
+    
+    /**
+     * 设置低延迟模式（必须在 setMedia 之前调用）
+     */
+    void setLiveLowLatency(bool enabled);
+    
+    /**
+     * 设置网络超时（毫秒，必须在 setMedia 之前调用）
+     */
+    void setTimeout(int timeoutMs);
+
 protected:
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -171,6 +208,9 @@ signals:
     void bufferingEnd();
     void bufferingUpdate(int percent);
     
+    // 媒体类型信号
+    void mediaTypeChanged(MediaType type, bool seekable);
+    
     // Seek 信号
     void seekComplete(long position);
 
@@ -185,6 +225,9 @@ private:
     void initPlayer();
     void cleanupPlayer();
     void setupLayout();
+    
+    // 检测是否为直播流 URL
+    static bool isLiveUrl(const QString &url);
     
     // 视频帧回调（静态，供 C 层调用）
     static void videoFrameCallback(void *opaque, FFPVideoFrame *frame);
@@ -235,6 +278,10 @@ private:
     
     // 缩放步进
     static constexpr float ZOOM_STEP = 0.1f;
+    
+    // 媒体类型
+    MediaType m_mediaType;
+    bool m_isSeekable;
 };
 
 #endif // PLAYERWIDGET_H

@@ -2368,6 +2368,8 @@ int stream_component_open(FFPlayer *ffp, VideoState *is, int stream_index)
     goto out;
 
 fail:
+    fprintf(stderr, "[stream_component_open] Failed with ret=%d for stream_index=%d\n", ret, stream_index);
+    fflush(stderr);
     avcodec_free_context(&avctx);
 out:
     av_channel_layout_uninit(&ch_layout);
@@ -2389,20 +2391,72 @@ int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *queue) {
            queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0);
 }
 
+/* 从 URL 检测是否为直播流（用于 avformat_open_input 之前）*/
+int is_live_url(const char *url)
+{
+    if (!url)
+        return 0;
+    
+    /* 基于 URL 协议检测 */
+    if (!strncmp(url, "rtmp://", 7) ||
+        !strncmp(url, "rtmps://", 8) ||
+        !strncmp(url, "rtmpt://", 8) ||
+        !strncmp(url, "rtsp://", 7) ||
+        !strncmp(url, "rtsps://", 8) ||
+        !strncmp(url, "rtp://", 6) ||
+        !strncmp(url, "udp://", 6) ||
+        !strncmp(url, "srt://", 6))
+        return 1;
+    
+    /* 检测 HTTP-FLV (以 .flv 结尾或包含 /live/) */
+    if (strstr(url, ".flv") && 
+        (!strncmp(url, "http://", 7) || !strncmp(url, "https://", 8)))
+        return 1;
+    
+    /* 检测 HLS */
+    if (strstr(url, ".m3u8") && 
+        (!strncmp(url, "http://", 7) || !strncmp(url, "https://", 8)))
+        return 1;
+    
+    return 0;
+}
+
 int is_realtime(AVFormatContext *s)
 {
-    if(   !strcmp(s->iformat->name, "rtp")
-       || !strcmp(s->iformat->name, "rtsp")
-       || !strcmp(s->iformat->name, "sdp")
-    )
+    const char *name = s->iformat->name;
+    
+    /* 1. 基于格式名称检测 */
+    if (!strcmp(name, "rtp") ||
+        !strcmp(name, "rtsp") ||
+        !strcmp(name, "sdp") ||
+        !strcmp(name, "flv") ||      /* HTTP-FLV 直播 */
+        !strcmp(name, "hls") ||      /* HLS 直播 */
+        !strcmp(name, "dash"))       /* DASH 直播 */
         return 1;
-
-    if(s->pb && (   !strncmp(s->url, "rtp:", 4)
-                 || !strncmp(s->url, "udp:", 4)
-                )
-    )
+    
+    /* 2. 基于 URL 协议检测 */
+    if (s->url && is_live_url(s->url))
         return 1;
+    
     return 0;
+}
+
+/* 检测是否可 seek */
+int is_seekable(AVFormatContext *s)
+{
+    /* 直播流不可 seek */
+    if (is_realtime(s))
+        return 0;
+    
+    /* 检查 pb 是否支持 seek */
+    if (s->pb && !s->pb->seekable)
+        return 0;
+    
+    /* 检查 duration 是否有效 */
+    if (s->duration <= 0 || s->duration == AV_NOPTS_VALUE)
+        return 0;
+    
+    return 1;
 }
 
 /* this thread gets the stream from the disk or the network */
@@ -2449,19 +2503,62 @@ int read_thread(void *arg)
         scan_all_pmts_set = 1;
     }
 
+    /* 在打开之前检测是否为直播流，并应用相应选项 */
+    /* 注意：对于 RTMP 流暂时不应用 live options，因为某些选项可能不兼容 */
+    if (is_live_url(is->filename)) {
+        fprintf(stderr, "[LIVE] Detected live URL: %s\n", is->filename);
+        fflush(stderr);
+        
+        /* RTMP 流不应用通用的 live options，只设置基本参数 */
+        if (strncmp(is->filename, "rtmp://", 7) == 0 ||
+            strncmp(is->filename, "rtmps://", 8) == 0 ||
+            strncmp(is->filename, "rtmpt://", 8) == 0) {
+            fprintf(stderr, "[LIVE] RTMP stream detected, using minimal options\n");
+            fflush(stderr);
+            /* 对 RTMP 只设置基本的探测参数 */
+            av_dict_set(&ffp->format_opts, "analyzeduration", "2000000", 0);
+            av_dict_set(&ffp->format_opts, "probesize", "2000000", 0);
+        } else {
+            ffp_apply_live_options(ffp);
+        }
+    }
+
+    fprintf(stderr, "[READ_THREAD] Opening input: %s\n", is->filename);
+    fflush(stderr);
+    
+    /* 打印所有 format_opts */
+    {
+        const AVDictionaryEntry *e = NULL;
+        fprintf(stderr, "[READ_THREAD] format_opts:\n");
+        while ((e = av_dict_get(ffp->format_opts, "", e, AV_DICT_IGNORE_SUFFIX))) {
+            fprintf(stderr, "  %s = %s\n", e->key, e->value);
+        }
+        fflush(stderr);
+    }
+    
     err = avformat_open_input(&ic, is->filename, is->iformat, &ffp->format_opts);
     if (err < 0) {
+        fprintf(stderr, "[READ_THREAD] avformat_open_input failed: %d\n", err);
+        fflush(stderr);
         print_error(is->filename, err);
         ret = -1;
         goto fail;
     }
+    fprintf(stderr, "[READ_THREAD] avformat_open_input succeeded\n");
+    fflush(stderr);
     if (scan_all_pmts_set)
         av_dict_set(&ffp->format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
 
+    /* 检查是否有未被 FFmpeg 消费的选项（即 FFmpeg 不认识的选项）*/
+    /* 注意：改为警告而不是错误，因为某些通用选项（如 reconnect）不是所有协议都支持 */
     if ((t = av_dict_get(ffp->format_opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
-        av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
-        ret = AVERROR_OPTION_NOT_FOUND;
-        goto fail;
+        fprintf(stderr, "[READ_THREAD] WARNING: Some options not recognized by this format:\n");
+        const AVDictionaryEntry *e = NULL;
+        while ((e = av_dict_get(ffp->format_opts, "", e, AV_DICT_IGNORE_SUFFIX))) {
+            fprintf(stderr, "  - %s = %s (ignored)\n", e->key, e->value);
+        }
+        fflush(stderr);
+        /* 不再因为未知选项而失败，只是警告 */
     }
     is->ic = ic;
 
@@ -2474,6 +2571,8 @@ int read_thread(void *arg)
         AVDictionary **opts = setup_find_stream_info_opts(ic, ffp->codec_opts);
         int orig_nb_streams = ic->nb_streams;
 
+        fprintf(stderr, "[READ_THREAD] Finding stream info...\n");
+        fflush(stderr);
         err = avformat_find_stream_info(ic, opts);
 
         for (i = 0; i < orig_nb_streams; i++)
@@ -2481,11 +2580,15 @@ int read_thread(void *arg)
         av_freep(&opts);
 
         if (err < 0) {
+            fprintf(stderr, "[READ_THREAD] avformat_find_stream_info failed: %d\n", err);
+            fflush(stderr);
             av_log(NULL, AV_LOG_WARNING,
                    "%s: could not find codec parameters\n", is->filename);
             ret = -1;
             goto fail;
         }
+        fprintf(stderr, "[READ_THREAD] avformat_find_stream_info succeeded, nb_streams=%d\n", ic->nb_streams);
+        fflush(stderr);
     }
 
     if (ic->pb)
@@ -2515,6 +2618,29 @@ int read_thread(void *arg)
     }
 
     is->realtime = is_realtime(ic);
+    
+    /* 更新 FFPlayer 的媒体类型信息 */
+    ffp->is_realtime = is->realtime;
+    ffp->is_seekable = is_seekable(ic);
+    
+    if (is->realtime) {
+        ffp->media_type = FFP_MEDIA_TYPE_LIVE;
+        av_log(NULL, AV_LOG_INFO, "[LIVE] Detected live stream: %s\n", is->filename);
+    } else if (ffp->is_seekable) {
+        /* 判断是本地文件还是网络点播 */
+        if (is->filename && (strncmp(is->filename, "http://", 7) == 0 ||
+                             strncmp(is->filename, "https://", 8) == 0 ||
+                             strncmp(is->filename, "ftp://", 6) == 0)) {
+            ffp->media_type = FFP_MEDIA_TYPE_VOD;
+        } else {
+            ffp->media_type = FFP_MEDIA_TYPE_FILE;
+        }
+    } else {
+        ffp->media_type = FFP_MEDIA_TYPE_UNKNOWN;
+    }
+    
+    /* 通知上层媒体类型 */
+    ffp_notify_msg3(ffp, FFP_MSG_MEDIA_TYPE_CHANGED, ffp->media_type, ffp->is_seekable);
 
     if (ffp->show_status)
         av_dump_format(ic, 0, is->filename, 0);
@@ -2552,6 +2678,10 @@ int read_thread(void *arg)
                                  st_index[AVMEDIA_TYPE_AUDIO] :
                                  st_index[AVMEDIA_TYPE_VIDEO]),
                                 NULL, 0);
+    
+    fprintf(stderr, "[READ_THREAD] Stream indices: video=%d, audio=%d, subtitle=%d\n",
+           st_index[AVMEDIA_TYPE_VIDEO], st_index[AVMEDIA_TYPE_AUDIO], st_index[AVMEDIA_TYPE_SUBTITLE]);
+    fflush(stderr);
 
     is->show_mode = ffp->show_mode;
     if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) {
@@ -2563,30 +2693,51 @@ int read_thread(void *arg)
     }
 
     /* open the streams */
+    fprintf(stderr, "[READ_THREAD] Opening streams...\n");
+    fflush(stderr);
     if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) {
-        stream_component_open(ffp, is, st_index[AVMEDIA_TYPE_AUDIO]);
+        int audio_ret = stream_component_open(ffp, is, st_index[AVMEDIA_TYPE_AUDIO]);
+        fprintf(stderr, "[READ_THREAD] Audio stream open result: %d, is->audio_stream=%d\n", 
+               audio_ret, is->audio_stream);
+        fflush(stderr);
     }
 
     ret = -1;
     if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) {
         ret = stream_component_open(ffp, is, st_index[AVMEDIA_TYPE_VIDEO]);
+        fprintf(stderr, "[READ_THREAD] Video stream open result: %d, is->video_stream=%d\n", 
+               ret, is->video_stream);
+        fflush(stderr);
     }
     if (is->show_mode == SHOW_MODE_NONE)
         is->show_mode = ret >= 0 ? SHOW_MODE_VIDEO : SHOW_MODE_RDFT;
 
     if (st_index[AVMEDIA_TYPE_SUBTITLE] >= 0) {
-        stream_component_open(ffp, is, st_index[AVMEDIA_TYPE_SUBTITLE]);
+        int sub_ret = stream_component_open(ffp, is, st_index[AVMEDIA_TYPE_SUBTITLE]);
+        fprintf(stderr, "[READ_THREAD] Subtitle stream open result: %d\n", sub_ret);
+        fflush(stderr);
     }
 
+    fprintf(stderr, "[READ_THREAD] Final stream status: video_stream=%d, audio_stream=%d\n",
+           is->video_stream, is->audio_stream);
+    fflush(stderr);
+
     if (is->video_stream < 0 && is->audio_stream < 0) {
-        av_log(NULL, AV_LOG_FATAL, "Failed to open file '%s' or configure filtergraph\n",
+        fprintf(stderr, "[READ_THREAD] Failed to open file '%s' or configure filtergraph\n",
                is->filename);
+        fflush(stderr);
         ret = -1;
         goto fail;
     }
 
     if (ffp->infinite_buffer < 0 && is->realtime)
         ffp->infinite_buffer = 1;
+
+    /* 媒体流成功打开，发送 PREPARED 消息 */
+    fprintf(stderr, "[READ_THREAD] Media prepared successfully, sending FFP_MSG_PREPARED\n");
+    fflush(stderr);
+    ffp->prepared = 1;
+    ffp_notify_msg1(ffp, FFP_MSG_PREPARED);
 
     for (;;) {
         if (is->abort_request)
@@ -2730,9 +2881,13 @@ int read_thread(void *arg)
 
     ret = 0;
     /* 播放正常结束，发送 COMPLETED 消息 */
+    fprintf(stderr, "[READ_THREAD] Playback completed normally\n");
+    fflush(stderr);
     ffp_notify_msg1(ffp, FFP_MSG_COMPLETED);
     
  fail:
+    fprintf(stderr, "[READ_THREAD] Entering fail label, ret=%d\n", ret);
+    fflush(stderr);
     if (ic && !is->ic)
         avformat_close_input(&ic);
 
@@ -2741,6 +2896,8 @@ int read_thread(void *arg)
         SDL_Event event;
 
         /* 发送错误消息 */
+        fprintf(stderr, "[READ_THREAD] Sending FFP_MSG_ERROR with ret=%d\n", ret);
+        fflush(stderr);
         ffp_notify_msg2(ffp, FFP_MSG_ERROR, ret);
 
         event.type = FF_QUIT_EVENT;
@@ -2755,12 +2912,18 @@ VideoState *stream_open(FFPlayer *ffp, const char *filename, const AVInputFormat
 {
     VideoState *is;
 
+    fprintf(stderr, "[STREAM_OPEN] Starting stream_open for: %s\n", filename);
+    fflush(stderr);
+    
     is = av_mallocz(sizeof(VideoState));
-    if (!is)
+    if (!is) {
+        fprintf(stderr, "[STREAM_OPEN] Failed to allocate VideoState\n");
+        fflush(stderr);
         return NULL;
+    }
     is->ffp = ffp;  /* Store FFPlayer reference */
-    av_log(NULL, AV_LOG_INFO, "[STREAM-OPEN] Created VideoState is=%p for ffp=%p file=%s\n", 
-           is, ffp, filename);
+    fprintf(stderr, "[STREAM_OPEN] Created VideoState is=%p for ffp=%p\n", (void*)is, (void*)ffp);
+    fflush(stderr);
     is->last_video_stream = is->video_stream = -1;
     is->last_audio_stream = is->audio_stream = -1;
     is->last_subtitle_stream = is->subtitle_stream = -1;
@@ -2802,13 +2965,20 @@ VideoState *stream_open(FFPlayer *ffp, const char *filename, const AVInputFormat
     is->audio_volume = ffp->startup_volume;
     is->muted = 0;
     is->av_sync_type = ffp->av_sync_type;
+    fprintf(stderr, "[STREAM_OPEN] Creating read_thread...\n");
+    fflush(stderr);
     is->read_tid     = SDL_CreateThread(read_thread, "read_thread", is);
     if (!is->read_tid) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateThread(): %s\n", SDL_GetError());
+        fprintf(stderr, "[STREAM_OPEN] SDL_CreateThread failed: %s\n", SDL_GetError());
+        fflush(stderr);
 fail:
+        fprintf(stderr, "[STREAM_OPEN] stream_open failed, cleaning up\n");
+        fflush(stderr);
         stream_close(ffp, is);
         return NULL;
     }
+    fprintf(stderr, "[STREAM_OPEN] read_thread created successfully, tid=%p\n", (void*)is->read_tid);
+    fflush(stderr);
     
     return is;
 }

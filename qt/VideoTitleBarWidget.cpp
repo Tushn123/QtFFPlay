@@ -219,6 +219,20 @@ void VideoTitleBarWidget::initUI()
     titleEdit->setMinimumWidth(150);
     titleEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     
+    // 直播指示器（默认隐藏）
+    liveIndicator = new QLabel("● LIVE", this);
+    liveIndicator->setStyleSheet(R"(
+        QLabel {
+            color: #ff4444;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 2px 8px;
+            background-color: rgba(255, 68, 68, 50);
+            border-radius: 4px;
+        }
+    )");
+    liveIndicator->hide();
+    
     // 打开文件按钮
     openButton = new QPushButton("📂 打开", this);
     openButton->setFixedSize(70, 26);
@@ -251,6 +265,7 @@ void VideoTitleBarWidget::initUI()
     
     // 添加到布局
     mainLayout->addWidget(titleEdit, 1);  // 路径占用剩余空间
+    mainLayout->addWidget(liveIndicator);
     mainLayout->addWidget(openButton);
     mainLayout->addWidget(scaleModeCombo);
 }
@@ -330,4 +345,15 @@ void VideoTitleBarWidget::setVideoPath(const QString &path)
 QString VideoTitleBarWidget::videoPath() const
 {
     return titleEdit->path();
+}
+
+void VideoTitleBarWidget::setLiveMode(bool isLive)
+{
+    if (isLive) {
+        liveIndicator->show();
+        qDebug() << "[VideoTitleBarWidget] Live mode enabled";
+    } else {
+        liveIndicator->hide();
+        qDebug() << "[VideoTitleBarWidget] Live mode disabled";
+    }
 }
