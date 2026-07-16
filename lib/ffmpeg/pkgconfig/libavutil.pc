@@ -1,0 +1,14 @@
+prefix=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install
+exec_prefix=${prefix}
+libdir=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install/lib
+includedir=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 58.29.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil 
+Libs.private: -lva_win32 -lva -lm -lssl -lcrypto -luser32 -lva -lbcrypt -latomic
+Cflags: -I${includedir}

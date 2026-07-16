@@ -1,0 +1,14 @@
+prefix=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install
+exec_prefix=${prefix}
+libdir=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install/lib
+includedir=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install/include
+
+Name: libavfilter
+Description: FFmpeg audio/video filtering library
+Version: 9.12.100
+Requires: 
+Requires.private: libswscale >= 7.5.100, libpostproc >= 57.3.100, libavformat >= 60.16.100, libavcodec >= 60.31.102, libswresample >= 4.12.100, libavutil >= 58.29.100
+Conflicts:
+Libs: -L${libdir}  -lavfilter 
+Libs.private: -lm -latomic -lharfbuzz -lfribidi -lass -lva -lzimg -lfontconfig -lfreetype
+Cflags: -I${includedir}

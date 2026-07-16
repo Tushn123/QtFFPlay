@@ -1,0 +1,14 @@
+prefix=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install
+exec_prefix=${prefix}
+libdir=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install/lib
+includedir=/c/shn/workspace/source/ffmpeg-6.1.1-source-build/install/include
+
+Name: libavcodec
+Description: FFmpeg codec library
+Version: 60.31.102
+Requires: 
+Requires.private: libswresample >= 4.12.100, libavutil >= 58.29.100
+Conflicts:
+Libs: -L${libdir}  -lavcodec 
+Libs.private: -lvpx -lm -lvpx -lm -lvpx -lm -lvpx -lm -lwebpmux -liconv -lm -latomic -llzma -ldav1d -laom -lmp3lame -lm -lopenjp2 -lopus -lvorbis -lvorbisenc -lwebp -lx264 -lx265 -lmfuuid -lole32 -lstrmiids -lole32 -luser32 -lz -lva
+Cflags: -I${includedir}
