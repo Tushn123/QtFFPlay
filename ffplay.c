@@ -61,6 +61,7 @@
 
 #include "cmdutils.h"
 #include "opt_common.h"
+#include "ff_startup_timer.h"
 
 const char program_name[] = "ffplay";
 const int program_birth_year = 2003;
@@ -1073,6 +1074,7 @@ static void video_image_display(VideoState *is)
         }
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
+        ff_startup_timer_mark(FF_ST_FIRST_FRAME_TEXTURE);
     }
 
     // 播放画面，将纹理渲染到屏幕
@@ -1403,6 +1405,8 @@ static int video_open(VideoState *is)
 /* display the current picture, if any */
 static void video_display(VideoState *is)
 {
+    int video_presented = 0;
+
     if (!is->width)
         video_open(is);
 
@@ -1411,10 +1415,14 @@ static void video_display(VideoState *is)
     if (is->audio_st && is->show_mode != SHOW_MODE_VIDEO)
         // 渲染音频的波形/频谱
         video_audio_display(is);
-    else if (is->video_st)
+    else if (is->video_st) {
         // 渲染视频画面
         video_image_display(is);
+        video_presented = 1;
+    }
     SDL_RenderPresent(renderer);
+    if (video_presented)
+        ff_startup_timer_mark(FF_ST_FIRST_FRAME_PRESENT);
 }
 
 static double get_clock(Clock *c)
@@ -1854,6 +1862,7 @@ static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, double 
     av_frame_move_ref(vp->frame, src_frame);
     // 链路追踪: 5.6、frame_queue_push, 视频封装成 Frame 入队
     frame_queue_push(&is->pictq);
+    ff_startup_timer_mark(FF_ST_FIRST_VIDEO_QUEUED);
     return 0;
 }
 
@@ -1888,6 +1897,9 @@ static int get_video_frame(VideoState *is, AVFrame *frame)
             }
         }
     }
+
+    if (got_picture)
+        ff_startup_timer_mark(FF_ST_FIRST_VIDEO_DECODED);
 
     return got_picture;
 }
@@ -2240,6 +2252,8 @@ static int video_thread(void *arg)
 
     if (!frame)
         return AVERROR(ENOMEM);
+
+    ff_startup_timer_mark(FF_ST_VIDEO_DECODE_THREAD);
 
     for (;;) {
         // 链路追踪: 5.2、get_video_frame, 循环获取frame
@@ -2909,6 +2923,8 @@ static int read_thread(void *arg)
     int scan_all_pmts_set = 0;
     int64_t pkt_ts;
 
+    ff_startup_timer_mark(FF_ST_READ_THREAD_BEGIN);
+
     if (!wait_mutex) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
         ret = AVERROR(ENOMEM);
@@ -2945,12 +2961,14 @@ static int read_thread(void *arg)
     // 3、打开 I/O 通道（本地文件: fopen / open, 网络流: 建立 socket 连接）
     // 4、探测输入格式（读取文件头部数据、遍历所有注册的 demuxer、调用 read_probe() 评分）
     // 5、如果探测到输入格式，则根据该格式使用相对应的 demuxer 打开输入流
+    ff_startup_timer_mark(FF_ST_AVFORMAT_OPEN_BEGIN);
     err = avformat_open_input(&ic, is->filename, is->iformat, &format_opts);
     if (err < 0) {
         print_error(is->filename, err);
         ret = -1;
         goto fail;
     }
+    ff_startup_timer_mark(FF_ST_AVFORMAT_OPEN_END);
     if (scan_all_pmts_set)
         av_dict_set(&format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
 
@@ -2970,6 +2988,7 @@ static int read_thread(void *arg)
         AVDictionary **opts = setup_find_stream_info_opts(ic, codec_opts);
         int orig_nb_streams = ic->nb_streams;
 
+        ff_startup_timer_mark(FF_ST_FIND_STREAM_INFO_BEGIN);
         // 探测和完善流信息，通过实际读取和解码部分数据来获取 avformat_open_input 无法直接获取的信息:
         // 1、为每个流创建临时解码器
         // 2、循环读取数据包
@@ -2988,6 +3007,10 @@ static int read_thread(void *arg)
             ret = -1;
             goto fail;
         }
+        ff_startup_timer_mark(FF_ST_FIND_STREAM_INFO_END);
+    } else {
+        ff_startup_timer_mark_detail(FF_ST_FIND_STREAM_INFO_BEGIN, "skipped");
+        ff_startup_timer_mark_detail(FF_ST_FIND_STREAM_INFO_END, "skipped");
     }
 
     if (ic->pb)
@@ -3074,11 +3097,14 @@ static int read_thread(void *arg)
     /* open the streams */
     if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) {
         stream_component_open(is, st_index[AVMEDIA_TYPE_AUDIO]);
+        ff_startup_timer_mark(FF_ST_OPEN_AUDIO);
     }
 
     ret = -1;
     if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) {
         ret = stream_component_open(is, st_index[AVMEDIA_TYPE_VIDEO]);
+        if (ret >= 0)
+            ff_startup_timer_mark(FF_ST_OPEN_VIDEO);
     }
     // 选择怎么显示，如果视频打开成功，就显示视频画⾯，否则，显示⾳频对应的频谱图
     if (is->show_mode == SHOW_MODE_NONE)
@@ -3237,6 +3263,7 @@ static int read_thread(void *arg)
         } else {
             // 读取成功，则说明还未读取完
             is->eof = 0;
+            ff_startup_timer_mark(FF_ST_FIRST_PACKET);
         }
         /* check if packet is in play range specified by user, then queue, otherwise discard */
         // 获取流的开始时间
@@ -3260,6 +3287,7 @@ static int read_thread(void *arg)
                    && !(is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
             // 链路追踪: 5.1、packet_queue_put, 视频packet入队
             packet_queue_put(&is->videoq, pkt);
+            ff_startup_timer_mark(FF_ST_FIRST_VIDEO_PACKET);
         } else if (pkt->stream_index == is->subtitle_stream && pkt_in_play_range) {
             packet_queue_put(&is->subtitleq, pkt);
         } else {
@@ -3289,6 +3317,8 @@ static VideoState *stream_open(const char *filename,
                                const AVInputFormat *iformat)
 {
     VideoState *is;
+
+    ff_startup_timer_mark(FF_ST_STREAM_OPEN_BEGIN);
 
     is = av_mallocz(sizeof(VideoState));
     if (!is)
@@ -3350,6 +3380,7 @@ fail:
         stream_close(is);
         return NULL;
     }
+    ff_startup_timer_mark(FF_ST_STREAM_OPEN_END);
     return is;
 }
 
@@ -3930,6 +3961,10 @@ int main(int argc, char **argv)
     if (display_disable) {
         video_disable = 1;
     }
+
+    ff_startup_timer_reset();
+    ff_startup_timer_mark(FF_ST_T0_PLAY_REQUEST);
+
     flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
     if (audio_disable)
         flags &= ~SDL_INIT_AUDIO;
@@ -3989,6 +4024,8 @@ int main(int argc, char **argv)
             do_exit(NULL);
         }
     }
+
+    ff_startup_timer_mark(FF_ST_SDL_INIT_DONE);
 
     // 链路追踪: 0、stream_open, 打开流的初始化操作
     is = stream_open(input_filename, file_iformat);

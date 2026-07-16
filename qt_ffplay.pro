@@ -5,7 +5,8 @@ CONFIG += console
 SOURCES += \
     ffplay.c \
     cmdutils.c \
-    opt_common.c
+    opt_common.c \
+    ff_startup_timer.c
 
 # ========== 输出目录配置 ==========
 # 可执行文件直接输出到源码目录的 bin/
