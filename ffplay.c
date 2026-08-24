@@ -2725,11 +2725,13 @@ static int is_realtime(AVFormatContext *s)
     if(   !strcmp(s->iformat->name, "rtp")
        || !strcmp(s->iformat->name, "rtsp")
        || !strcmp(s->iformat->name, "sdp")
+       || !strcmp(s->iformat->name, "srt")
     )
         return 1;
 
     if(s->pb && (   !strncmp(s->url, "rtp:", 4)
                  || !strncmp(s->url, "udp:", 4)
+                 || !strncmp(s->url, "srt:", 4)
                 )
     )
         return 1;
